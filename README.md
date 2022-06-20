@@ -2,3 +2,5 @@
 All the Ansible playbooks for my homelab.
 
 More information about these playbooks can be found on my blog at https://tizutech.com!
+
+## Adapted from the starting Ansible playbook of TiZuTech.
