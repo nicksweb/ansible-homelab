@@ -13,7 +13,7 @@
          user:
               name: "{{ create_user }}"
               shell: /bin/bash
-              groups: "{{ create_group }},adm,cdrom,sudo,dip,plugdev,lxd"
+              groups: "{{ create_group }},sudo"
        - name: Add {{ create_user }} user to the sudoers
          copy:
               dest: "/etc/sudoers.d/{{ create_user }}"
@@ -26,7 +26,7 @@
          user:
               name: ansible
               shell: /bin/bash
-              groups: ansible,adm,cdrom,sudo,dip,plugdev,lxd
+              groups: ansible,sudo
        - name: Add ansible user to the sudoers
          copy:
               dest: "/etc/sudoers.d/ansible"

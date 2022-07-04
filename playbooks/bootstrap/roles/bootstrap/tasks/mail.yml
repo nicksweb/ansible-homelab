@@ -1,8 +1,0 @@
-- name: Creating users and groups with ssh keys
-  include_tasks: users.yml
-
-- name: Updating OS
-  include_tasks: update_os.yml
-
-- name: Hardening sshd
-  include_tasks: sshd.yml

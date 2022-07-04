@@ -1,5 +1,5 @@
 ---
- - hosts: ubuntu
+ - hosts: linux
    gather_facts: true
    tasks:
    - name: Updating OS

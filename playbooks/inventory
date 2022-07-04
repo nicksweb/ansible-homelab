@@ -2,17 +2,9 @@
 
 [linux:children]
 ubuntu
-raspberrypi
 
 [ubuntu] 
 172.16.0.27
-
-[raspberrypi]
-172.16.0.26
-172.16.0.23
-
-[setup]
-172.16.0.26
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3

@@ -1,0 +1,19 @@
+---
+   - name: Installing APPs
+     block:
+       - name: Installing SA Network APPs
+         become: yes
+         package: 
+           name:
+             - sudo
+             - htop
+             - bwm-ng
+             - vnstat
+             - fail2ban
+       
+       - name: Configure Fail2Ban
+         become: yes
+         copy:  
+           src: configs/jail.local
+           dest: /etc/fail2ban/jail.local
+
