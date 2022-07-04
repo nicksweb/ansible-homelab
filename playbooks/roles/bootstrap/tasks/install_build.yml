@@ -14,6 +14,10 @@
        - name: Configure Fail2Ban
          become: yes
          copy:  
-           src: configs/jail.local
+           src: ../files/jail.local
            dest: /etc/fail2ban/jail.local
 
+       - name: Restart fail2ban
+         service:
+           name: 'fail2ban'
+           state: 'restarted'

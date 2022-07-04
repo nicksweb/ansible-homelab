@@ -1,9 +1,0 @@
-- name: Bootstrap
-  hosts: setup
-  gather_facts: yes
-  become: true
-  become_method: sudo
-  become_user: root
-  roles:
-    - bootstrap
-

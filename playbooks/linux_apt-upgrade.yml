@@ -1,6 +1,7 @@
 ---
  - hosts: linux
    gather_facts: true
+   become: yes
    tasks:
    - name: Updating OS
      block:

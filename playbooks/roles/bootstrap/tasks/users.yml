@@ -9,11 +9,14 @@
          group:
               name: ansible
               state: present
+
        - name: Create {{ create_user }} user
          user:
               name: "{{ create_user }}"
               shell: /bin/bash
               groups: "{{ create_group }},sudo"
+              password: "{{ passwd | password_hash('sha512') }}"
+       
        - name: Add {{ create_user }} user to the sudoers
          copy:
               dest: "/etc/sudoers.d/{{ create_user }}"
