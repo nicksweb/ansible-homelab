@@ -4,30 +4,27 @@
 ubuntu
 raspberrypi
 webserver
-setup
-docker
+proxmox
 
 [ubuntu] 
-172.16.0.27
-172.16.1.241
-172.16.1.242
-172.16.1.249
-172.16.0.27
+172.16.0.31
+172.16.0.32
+172.16.0.33
 
 [raspberrypi]
-172.16.0.26
-172.16.0.23
-172.16.0.24
+
 
 [webserver]
 172.16.253.3 ansible_port=10022
 
+[proxmox]
+172.16.0.30 ansible_user=root
+
 [setup]
-#172.16.0.173 ansible_port=22 ansible_user=test
-172.16.1.62 ansible_user=pi
+172.16.0.173 ansible_user=test
 
 [docker]
-172.16.0.173
+
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3
