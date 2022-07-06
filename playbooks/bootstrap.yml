@@ -7,9 +7,10 @@
 
   vars_prompt:
     - name: passwd
-      prompt: "Enter the desired {{ create_user }} password:"
+      prompt: "Enter the desired {{ create_user }} password"
       private: yes
 
   roles:
     - bootstrap
+    - geerlingguy.ntp
 

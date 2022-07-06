@@ -1,0 +1,39 @@
+- hosts: all
+  become_user: localadmin
+ 
+  vars_prompt:
+    - name: backupdate
+      prompt: "Enter the date of the backup - Format YYYYMMDD"
+      private: no
+    - name: dockeruser
+      prompt: "Enter the name of the user who is going to run the docker containers"
+      private: no
+    
+  tasks: 
+    - name: "Add connected user {{ dockeruser }} to DOCKER group."
+      become_user: root
+      user: name={{ dockeruser }}
+            groups=docker
+            append=yes
+      
+    - name: Copy Docker Backup from SANAS01
+      become_user: "{{ dockeruser }}" 
+      copy: 
+        src: /media/nicholaso/VMs-Tech/SANAS01/archive/SADocker01/{{ backupdate }}-{{ dockeruser }}-SADocker01.tar.gz
+        dest: /home/localadmin/docker/
+        owner: localadmin
+        group: localadmin
+        mode: 0711
+        
+    - name: Extract the Tar.GZ to the /home/{{ dockeruser }}/docker directory.
+      become_user: "{{ dockeruser }}"
+      shell: 
+        "tar -xf /home/{{ dockeruser }}/docker/{{ backupdate }}-{{ dockeruser }}-SADocker01.tar.gz -C /"
+  
+    - name: Open the Docker Containers 
+      become_user: "{{ dockeruser }}"
+      shell: 
+        "cd /home/{{ dockeruser }}/docker && find . -maxdepth 1 -type d \\( ! -name . \\) -exec bash -c \"cd '{}' && docker-compose up -d\" \\;"
+  
+  roles:
+    - geerlingguy.docker
