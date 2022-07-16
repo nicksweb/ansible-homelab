@@ -10,6 +10,8 @@
              - bwm-ng
              - vnstat
              - fail2ban
+             - apt-transport-https
+             - ca-certificates
        
        - name: Configure Fail2Ban
          become: yes

@@ -1,5 +1,7 @@
 - name: Bootstrap
   hosts: setup 
+  vars_files:
+    - roles/ntp/vars/main.yml
   gather_facts: yes
   become: true
   become_method: sudo

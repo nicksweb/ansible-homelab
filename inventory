@@ -8,11 +8,10 @@ setup
 docker
 
 [ubuntu] 
-172.16.0.27
 172.16.1.241
 172.16.1.242
 172.16.1.249
-172.16.0.27
+172.16.0.91 ansible_user=localadmin
 172.16.2.123
 
 [raspberrypi]
@@ -24,12 +23,11 @@ docker
 172.16.253.3 ansible_port=10022
 
 [setup]
-#172.16.0.173 ansible_port=22 ansible_user=test
-172.16.1.62 ansible_user=pi
-172.16.2.123
+172.16.0.91
 
 [docker]
-172.16.0.173
+172.16.0.27
+172.16.0.28
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3

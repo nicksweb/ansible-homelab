@@ -1,5 +1,5 @@
 - hosts: all
-  become_user: localadmin
+  become: yes
  
   vars_prompt:
     - name: backupdate
@@ -23,12 +23,18 @@
         dest: /home/localadmin/docker/
         owner: localadmin
         group: localadmin
-        mode: 0711
+        mode: 0771
         
     - name: Extract the Tar.GZ to the /home/{{ dockeruser }}/docker directory.
       become_user: "{{ dockeruser }}"
+      become: yes
       shell: 
         "tar -xf /home/{{ dockeruser }}/docker/{{ backupdate }}-{{ dockeruser }}-SADocker01.tar.gz -C /"
+
+    - name: Sleep for 20 seconods. 
+      wait_for:
+        delay: 30
+        timeout: 0
   
     - name: Open the Docker Containers 
       become_user: "{{ dockeruser }}"
