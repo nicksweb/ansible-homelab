@@ -12,15 +12,15 @@ docker
 172.16.1.242
 172.16.1.249
 172.16.0.91 ansible_user=localadmin
-172.16.2.123
+172.16.0.90
 
 [raspberrypi]
 172.16.0.26
-172.16.0.23
+172.16.0.23 ansible_user=pi
 172.16.0.24
 
 [webserver]
-172.16.253.3 ansible_port=10022
+
 
 [setup]
 172.16.0.91
