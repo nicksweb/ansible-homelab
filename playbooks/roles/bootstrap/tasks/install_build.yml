@@ -12,6 +12,7 @@
              - fail2ban
              - apt-transport-https
              - ca-certificates
+             - snmpd
        
        - name: Configure Fail2Ban
          become: yes
@@ -22,4 +23,15 @@
        - name: Restart fail2ban
          service:
            name: 'fail2ban'
+           state: 'restarted'
+           
+       - name: Configure SNMP
+         become: yes
+         copy:  
+           src: ../files/snmpd.conf
+           dest: /etc/snmp/snmpd.conf
+           
+       - name: Restart SNMPD
+         service:
+           name: 'snmpd'
            state: 'restarted'

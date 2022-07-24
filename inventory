@@ -23,11 +23,13 @@ docker
 
 
 [setup]
-172.16.0.91
+172.16.0.194
+172.16.0.199
 
 [docker]
 172.16.0.27
 172.16.0.28
+172.16.0.187
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3
