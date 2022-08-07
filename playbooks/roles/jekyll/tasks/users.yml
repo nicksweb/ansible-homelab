@@ -38,7 +38,3 @@
          authorized_key: user=ansible
                          key="{{ lookup('file', '{{ ssh_key_location }}') }}"
                          state=present
-       - name: Deploy SSH Key to localadmin user.
-         authorized_key: user=localadmin
-                         key="{{ lookup('file', '{{ ssh_key_location2 }}') }}"
-                         state=present

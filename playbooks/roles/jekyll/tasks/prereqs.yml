@@ -1,0 +1,10 @@
+---
+   - name: Installing System Requirements. 
+     block:
+       - name: Installing Jekyll requirements. 
+         become: yes
+         package: 
+           name:
+             - ruby-full
+             - build-essential
+             - zlib1g-dev

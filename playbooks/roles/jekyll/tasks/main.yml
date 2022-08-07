@@ -1,0 +1,11 @@
+- name: Installing pre-requsites.
+  include_tasks: prereqs.yml
+
+#- name: Updating OS
+#  include_tasks: update_os.yml
+  
+#- name: Install Basic Build applications.
+#  include_tasks: install_build.yml
+
+#- name: Hardening sshd
+#  include_tasks: sshd.yml

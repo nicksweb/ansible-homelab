@@ -1,6 +1,5 @@
 create_user: localadmin
 create_group: localadmin
 ssh_key_location: ~/.ssh/ansible.pub
-ssh_key_location2: ~/.ssh/nicholaso.corsair3900x.pub
 ssh_port: 22
 ssh_permit_root_login: false

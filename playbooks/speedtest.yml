@@ -1,0 +1,11 @@
+--- 
+
+- hosts: all
+  gather_facts: no
+  tasks:
+
+  - name: Run Speedtest-CLI
+    shell: speedtest-cli
+    register: ps
+
+  - debug: var=ps.stdout_lines
