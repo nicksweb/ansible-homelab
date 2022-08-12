@@ -2,29 +2,23 @@
 
 [linux:children]
 ubuntu
-raspberrypi
-webserver
 proxmox
+raspberrypi
 
 [ubuntu] 
-172.16.0.31
-172.16.0.32
-172.16.0.33
-
-[raspberrypi]
-
-
-[webserver]
-172.16.253.3 ansible_port=10022
+192.168.1.33
+192.168.1.32
+192.168.1.33
 
 [proxmox]
-172.16.0.30 ansible_user=root
+192.168.1.30 ansible_user=root
+
+[raspberrypi]
+192.168.1.39
 
 [setup]
-172.16.0.173 ansible_user=test
-
-[docker]
-
+192.168.1.33
+192.168.1.50
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3
