@@ -13,7 +13,6 @@ master
 172.16.1.242
 172.16.1.249
 172.16.0.91 ansible_user=localadmin
-172.16.0.90
 
 [raspberrypi]
 172.16.0.26
@@ -24,13 +23,11 @@ master
 
 
 [setup]
-172.16.0.232
+172.16.1.223
 
 [docker]
 172.16.0.27
 172.16.0.28
-172.16.0.207
-172.16.0.232
 
 [master]
 172.16.0.60 ansible_user=nicholaso
