@@ -1,0 +1,53 @@
+---
+- name: Copy directories
+  hosts: localhost
+  become: true
+
+  vars:
+    directories_to_copy:
+      - name: .ssh
+        src: /home/nicholaso/.ssh/
+        dest: /media/nicholaso/Nicholaso-System/Ansible/.ssh/
+      - name: .config
+        src: /home/nicholaso/.config/
+        dest: /media/nicholaso/Nicholaso-System/Ansible/.config/
+      - name: Pictures
+        src: /home/nicholaso/Pictures/
+        dest: /media/nicholaso/Nicholaso-System/Ansible/Pictures/
+      - name: Desktop
+        src: /home/nicholaso/Desktop/
+        dest: /media/nicholaso/Nicholaso-System/Ansible/Desktop/
+      - name: Pictures
+        src: /home/nicholaso/Pictures/
+        dest: /media/nicholaso/Nicholaso-System/Ansible/Pictures/
+
+  tasks:
+    - name: Create destination directories if they don't exist
+      file:
+        path: "{{ item.dest }}"
+        state: directory
+        mode: '0700'
+      loop: "{{ directories_to_copy }}"
+      loop_control:
+        loop_var: item
+
+    - name: Copy directories
+      synchronize:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      loop: "{{ directories_to_copy }}"
+      loop_control:
+        loop_var: item
+      become: true
+      become_user: root
+
+    - name: Set correct ownership and permissions on destination directories
+      file:
+        path: "{{ item.dest }}"
+        state: directory
+        mode: '0700'
+        owner: nicholaso
+        group: nicholaso
+      loop: "{{ directories_to_copy }}"
+      loop_control:
+        loop_var: item

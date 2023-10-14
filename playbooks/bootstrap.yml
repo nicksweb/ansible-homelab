@@ -4,7 +4,7 @@
     - roles/ntp/vars/main.yml
   gather_facts: yes
   become: true
-  become_method: sudo
+  #become_method: sudo
   become_user: root
 
   vars_prompt:

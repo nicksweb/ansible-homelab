@@ -1,0 +1,13 @@
+---
+ - hosts: linux
+   gather_facts: true
+   become: yes
+   tasks:
+   - name: Updating OS
+     block:
+       - name: Update apt repo and cache
+         apt:
+             update_cache: yes
+             force_apt_get: yes
+             cache_valid_time: 3600
+

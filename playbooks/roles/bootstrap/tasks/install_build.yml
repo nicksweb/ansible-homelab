@@ -5,7 +5,6 @@
          become: yes
          package: 
            name:
-             - sudo
              - htop
              - bwm-ng
              - vnstat

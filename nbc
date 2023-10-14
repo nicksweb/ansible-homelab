@@ -21,10 +21,16 @@ docker
 192.168.1.39
 
 [docker]
-192.168.1.35 ansible_user=localadmin
+192.168.1.35
+192.168.1.72
 
 [setup]
-192.168.1.36
+#192.168.1.30
+#192.168.1.50
+192.168.1.33
+#192.168.1.71
+192.168.1.72 
+#192.168.1.38 ansible_user=root
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3

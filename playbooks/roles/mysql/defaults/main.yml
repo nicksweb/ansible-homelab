@@ -1,0 +1,28 @@
+mysql_key_buffer_size: "256M"
+mysql_max_allowed_packet: "64M"
+mysql_table_open_cache: "256"
+
+mysql_user_home: /root
+mysql_user_name: root
+mysql_user_password: root
+
+mysql_root_home: /home/localadmin
+mysql_root_username: localadmin
+mysql_root_password: localadmin
+
+mysql_root_password_update: false
+mysql_enabled_on_startup: true
+
+overwrite_global_mycnf: true
+
+mysql_config_include_files: []
+
+mysql_server_id: "1"
+mysql_max_binlog_size: "100M"
+mysql_binlog_format: "ROW"
+mysql_expire_logs_days: "10"
+mysql_replication_role: ''
+mysql_replication_master: ''
+mysql_replication_user: {}
+
+

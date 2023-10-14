@@ -3,34 +3,56 @@
 [linux:children]
 ubuntu
 raspberrypi
-webserver
 setup
 docker
 master
+lampstack
+debian
+proxmox
+bitwarden
+
+[lampstack]
+cipi
+
+[proxmox]
+sapve01 ansible_user=root
+sapve02 ansible_user=root
+sapve03 ansible_user=root
+sapve04 ansible_user=root
+sapve05 ansible_user=root
+pve ansible_user=root
 
 [ubuntu] 
-172.16.1.241
-172.16.1.242
-172.16.1.249
-172.16.0.91 ansible_user=localadmin
+172.16.0.23
+unifi
+172.16.1.249 ansible_user=localadmin
+#172.16.0.91 ansible_user=localadmin
+
+[debian]
+172.16.0.93
 
 [raspberrypi]
-172.16.0.26
-172.16.0.23 ansible_user=pi
+pidns26
+pidns23
+sapi4a02
 172.16.0.24
 
-[webserver]
-
-
 [setup]
-172.16.1.223
+#172.16.1.93
+172.16.1.229
 
 [docker]
+172.16.1.243
+172.16.1.225
 172.16.0.27
 172.16.0.28
+172.16.1.229
+
+[bitwarden]
+172.16.1.93
 
 [master]
-172.16.0.60 ansible_user=nicholaso
+172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
 
 [linux:vars] 
 ansible_python_interpreter=/usr/bin/python3

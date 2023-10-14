@@ -1,8 +1,9 @@
+- name: Updating OS
+  include_tasks: update_os.yml
+
 - name: Creating users and groups with ssh keys
   include_tasks: users.yml
 
-- name: Updating OS
-  include_tasks: update_os.yml
   
 - name: Install Basic Build applications.
   include_tasks: install_build.yml

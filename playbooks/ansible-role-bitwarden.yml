@@ -1,0 +1,111 @@
+---
+- name: Deploy Bitwarden Server with Docker
+  hosts: bitwarden
+  become: true
+  become_user: root
+
+  tasks:
+    - name: Check if remote temporary directory exists
+      stat:
+        path: /root/.ansible/tmp
+      register: tmp_dir
+
+    - name: Create remote temporary directory
+      file:
+        path: /root/.ansible/tmp
+        state: directory
+        mode: '1777'
+      when: not tmp_dir.stat.exists or tmp_dir.stat.mode != '1777'
+
+    - name: Generate self-signed certificate and key
+      shell: |
+        mkdir -p /opt/bitwarden/certs
+        openssl req -newkey rsa:4096 -nodes -keyout /opt/bitwarden/certs/bitwarden.key -x509 -days 3650 -out /opt/bitwarden/certs/bitwarden.crt -subj "/CN=bitwarden"
+
+    - name: Install Docker dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg-agent
+          - software-properties-common
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu bionic stable
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+
+    - name: Install Docker Compose
+      shell: |
+        curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        chmod +x /usr/local/bin/docker-compose
+      args:
+        creates: /usr/local/bin/docker-compose
+
+    - name: Add localadmin to docker group
+      user:
+        name: localadmin
+        groups: docker
+        append: yes
+
+    - name: Add localadmin to bitwarden group
+      user:
+        name: localadmin
+        groups: bitwarden
+        append: yes
+
+    - name: Add bitwarden to docker group
+      user:
+        name: bitwarden
+        groups: docker
+        append: yes
+
+    - name: Clone or update Bitwarden Docker repository
+      command: git clone --config safe.directory=/opt/bitwarden https://github.com/bitwarden/server.git /opt/bitwarden
+      args:
+        creates: /opt/bitwarden/.git
+
+    - name: Set ownership of /opt/bitwarden directory
+      file:
+        path: /opt/bitwarden
+        owner: bitwarden
+        group: bitwarden
+        state: directory
+
+    - name: Create Bitwarden Docker Compose configuration file
+      copy:
+        content: |
+          version: '3'
+
+          services:
+            bitwarden:
+              image: bitwardenrs/server:latest
+              restart: always
+              ports:
+                - 80:80
+                - 3012:3012
+              volumes:
+                - ./data:/data
+                - ./certs:/certs
+              environment:
+                - ROCKET_TLS='{certs="/certs/bitwarden.crt",key="/certs/bitwarden.key"}'
+        dest: /opt/bitwarden/docker-compose.yml
+
+    - name: Pull and start Bitwarden containers
+      become_user: bitwarden
+      command: docker-compose up -d
+      args:
+        chdir: /opt/bitwarden
+        creates: docker-compose.yml

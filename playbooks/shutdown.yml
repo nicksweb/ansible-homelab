@@ -1,0 +1,16 @@
+---
+- name: Shutdown Linux System
+  hosts: linux
+  become: yes
+  gather_facts: false
+  tasks:
+    - name: Shutdown the system
+      command: "shutdown -h now"
+      ignore_errors: yes
+
+    - name: Wait for server to become unreachable
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 22
+        state: absent
+        timeout: 300

@@ -11,7 +11,15 @@
          apt: 
              upgrade=dist 
              force_apt_get=yes
-  
+
+       - name: Installing APPs
+         block:
+           - name: Installing SUDO
+             become: yes
+             package: 
+               name:
+                 - sudo
+
        - name: Clean up
          apt:
              autoremove: yes

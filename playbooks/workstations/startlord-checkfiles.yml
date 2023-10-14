@@ -1,0 +1,22 @@
+---
+- name: Check files with root:root permissions
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Find files with root:root permissions
+      find:
+        paths: /home/nicholaso/Documents
+        file_type: file
+        get_checksum: true
+      register: files_with_root_permissions
+      become: true
+      become_user: root
+
+    - name: Display files with root:root permissions
+      debug:
+        msg: "{{ item.path }}"
+      loop: "{{ files_with_root_permissions.files }}"
+      when: item.uid == 0 and item.gid == 0
+      become: true
+      become_user: root
