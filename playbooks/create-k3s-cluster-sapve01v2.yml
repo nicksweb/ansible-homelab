@@ -1,0 +1,62 @@
+---
+- name: Create and start Proxmox VMs from template
+  hosts: localhost
+  gather_facts: no
+  vars:
+    sapve01_host: "172.16.0.70:8006"
+    sapve01_user: "root@pam"
+    sapve01_password: "213hex4817"
+    sapve01_node: "sapve01"
+    ansible_python_interpreter: /usr/bin/python3
+  tasks:
+    - name: Create VMs from template
+      community.general.proxmox:
+#        api_host: "{{ sapve01_host }}"
+#        api_user: "{{ sapve01_user }}"
+#        api_password: "{{ sapve01_password }}"
+#        node: "{{ sapve01_node }}"
+#        state: present
+#        vmid: "{{ item.newid }}"
+#        ostemplate: "ubuntu-cloud-24"  # Replace with your actual template name
+#        hostname: "{{ item.name }}"
+#        storage: "SamsungNVME01"
+#        onboot: yes
+        api_user: "root@pam"
+        api_password: "213hex4817"
+        api_host: "172.16.0.70:8006"
+        vmid: "{{ item.newid }}"
+        node: "sapve01"
+        cores: 2
+        memory: 2048
+        storage: "SamsungNVME01"  # Update this line with the correct storage name
+        ostemplate: "ubuntu-cloud-24"
+        clone_type: "opportunistic"
+        hostname: "{{ item.name }}"
+        state: "present"
+        onboot: yes
+        validate_certs: no
+      loop:
+        - { vmid: 70800, newid: 157805, name: "k3s-01" }
+        - { vmid: 70800, newid: 157806, name: "k3s-02" }
+        - { vmid: 70800, newid: 157807, name: "k3s-03" }
+        - { vmid: 70800, newid: 157808, name: "k3s-04" }
+        - { vmid: 70800, newid: 157809, name: "k3s-05" }
+      delegate_to: localhost
+
+    - name: Start the VMs
+      community.general.proxmox:
+        api_host: "{{ sapve01_host }}"
+        api_user: "{{ sapve01_user }}"
+        api_password: "{{ sapve01_password }}"
+        node: "{{ sapve01_node }}"
+        state: started
+        vmid: "{{ item.newid }}"
+      loop:
+        - { newid: 157805 }
+        - { newid: 157806 }
+        - { newid: 157807 }
+        - { newid: 157808 }
+        - { newid: 157809 }
+      delegate_to: localhost
+
+- import_playbook: bootstrap.yml
