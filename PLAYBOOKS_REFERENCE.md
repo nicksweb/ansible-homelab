@@ -53,6 +53,49 @@ ansible-playbook playbooks/shutdown.yml -i inventory -k --limit "hosts_to_shutdo
 
 ## Machine Bootstrap & Setup
 
+### setup-onboard.yml
+**Purpose**: Comprehensive onboarding of new machines with SSH hardening, networking, and monitoring
+**Hosts**: `setup` group (or any new machine)
+**Usage**:
+```bash
+# Basic onboarding (SSH key already configured)
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host"
+
+# With hostname and IP configuration
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host" \
+  -e "host_hostname=docker-01 host_ipaddr=172.16.1.100 host_netmask=24 host_gateway=172.16.0.1"
+
+# On test machine before production
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
+```
+
+**What it does**:
+- Updates system and all packages
+- Installs monitoring tools: bwm-ng, vnstat, htop
+- Hardens SSH (key-based auth only, disables password auth, disables root login)
+- Configures hostname (if specified)
+- Configures static IP and DNS (optional, if variables provided)
+- Generates SSH key pair on host (ed25519)
+- Provides summary of changes
+
+**Variables** (optional - pass with `-e`):
+```yaml
+host_hostname: docker-01              # Set system hostname
+host_ipaddr: 172.16.1.100            # Static IP address
+host_netmask: 24                       # Network mask (CIDR or dotted)
+host_gateway: 172.16.0.1              # Default gateway
+host_dns_servers:                      # DNS servers
+  - 8.8.8.8
+  - 1.1.1.1
+host_interface: eth0                  # Network interface (auto-detected if not set)
+generate_ssh_key: true                 # Generate SSH key on host
+sshd_port: 22                          # SSH port
+```
+
+**When to use**: Initial setup of new machines you're adding to the homelab
+
+---
+
 ### bootstrap.yml
 **Purpose**: Initial setup of new machines (users, SSH, sudo, build tools)
 **Hosts**: `setup` group
@@ -195,35 +238,7 @@ ansible-playbook playbooks/ntp.yml -i inventory -kK
 
 ## Kubernetes & Container Orchestration
 
-### create-k3s-cluster-sapve01.yml
-**Purpose**: Create K3s Kubernetes cluster on Proxmox VE01
-**Hosts**: `k3s-sapve01` group
-**Usage**:
-```bash
-ansible-playbook playbooks/create-k3s-cluster-sapve01.yml -i inventory -kK
-```
-**What it does**:
-- Provisions VMs on sapve01 Proxmox host
-- Installs K3s Kubernetes distribution
-- Configures cluster networking
-
-**Prerequisites**:
-- Target nodes in k3s-sapve01 group
-- Proxmox access credentials in group vars
-
-**When to use**: Initial Kubernetes cluster setup
-
----
-
-### create-k3s-cluster-sapve01v2.yml
-**Purpose**: Alternative/updated K3s cluster creation (v2)
-**Usage**:
-```bash
-ansible-playbook playbooks/create-k3s-cluster-sapve01v2.yml -i inventory -kK
-```
-**Note**: Check which version is preferred for your setup
-
----
+*Note: Kubernetes/K3s not currently in use for this homelab.*
 
 ## Utilities & Monitoring
 
@@ -322,4 +337,4 @@ ansible-playbook <playbook> --syntax-check
 
 **Reference Version**: 1.0
 **Last Updated**: June 2026
-**Playbook Count**: 17 main playbooks
+**Playbook Count**: 16 main playbooks

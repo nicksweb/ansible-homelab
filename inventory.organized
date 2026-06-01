@@ -115,20 +115,7 @@ sapi4a02
 # ============================================================================
 # KUBERNETES / K3S CLUSTERS
 # ============================================================================
-# K3s worker nodes on Proxmox VE01
-[k3s-sapve01]
-172.16.2.106
-172.16.2.107
-172.16.2.108
-172.16.2.109
-172.16.2.110
-
-[k3s-sapve01:vars]
-sapve01_host=https://172.16.0.70:8006
-sapve01_user=root@pam
-sapve01_password=213hex4817
-sapve01_node=SAPVE01
-# TODO: Move password to vault for security
+# *Note: Kubernetes/K3s not currently in use. Remove this section if not needed.*
 
 
 # ============================================================================
@@ -136,19 +123,9 @@ sapve01_node=SAPVE01
 # ============================================================================
 # Machines being prepared or newly added - move to appropriate group after bootstrap
 [setup]
+# Add new machines here temporarily before assigning to permanent groups
 # 172.16.1.93
 # 172.16.1.229
-# 172.16.0.93
-# 172.16.1.111
-# 172.16.1.101
-# 172.16.0.55
-# 172.16.1.228
-# 172.16.1.160 ansible_user=pi
-172.16.2.106
-172.16.2.107
-172.16.2.108
-172.16.2.109
-172.16.2.110
 
 
 # ============================================================================
@@ -182,13 +159,15 @@ cipi
 
 
 # ============================================================================
-# PARENT GROUPS FOR BULK OPERATIONS
+# TEST / STAGING MACHINES
 # ============================================================================
-# Meta-groups for targeting multiple categories at once
+# Machines for testing new configurations or deployments
+# Use to test playbooks before running on production infrastructure
+[test]
+# 172.16.0.100  # Example test machine
+# test-docker-01
+# staging-server-01
 
-[linux]
-# Parent group containing ALL Linux machines
-# Used for bulk operations like apt-upgrade
 
 [linux:children]
 ubuntu
@@ -200,10 +179,10 @@ lampstack
 debian
 proxmox
 bitwarden
-k3s-sapve01
 service_servers
 workstations
 surveillance
+test
 
 # All machines in the infrastructure
 [all_infrastructure:children]

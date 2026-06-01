@@ -225,6 +225,16 @@ ansible -i inventory proxmox -m shell -a "pvecm status"
 ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --check
 ```
 
+### Test playbook on test group first
+```bash
+# Before running on production, test on test group
+ansible-playbook playbooks/docker.yml -i inventory -kK --limit "test" --check
+# If check passes, run on test machine
+ansible-playbook playbooks/docker.yml -i inventory -kK --limit "test"
+# Then run on production group
+ansible-playbook playbooks/docker.yml -i inventory -kK --limit "docker"
+```
+
 ### Run with verbose output
 ```bash
 ansible-playbook playbooks/bootstrap.yml -i inventory -kK -vv
@@ -262,6 +272,24 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "new_machine_i
 ### Bootstrap all setup group machines
 ```bash
 ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
+```
+
+### Onboard new machine (complete setup with SSH hardening & monitoring)
+```bash
+# Minimal onboarding
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host"
+```
+
+### Onboard with hostname and IP configuration
+```bash
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host" \
+  -e "host_hostname=docker-01 host_ipaddr=172.16.1.100 host_netmask=24 host_gateway=172.16.0.1"
+```
+
+### Onboard on test machine first (safe testing)
+```bash
+# Add test machine to [test] group in inventory, then:
+ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 ```
 
 ### Bootstrap and install Docker

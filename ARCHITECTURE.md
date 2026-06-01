@@ -4,16 +4,44 @@
 
 This Ansible project is designed to manage a home laboratory with multiple categories of infrastructure:
 
-- **Proxmox Hypervisors** - 5+ nodes running Proxmox VE for VM/LXC hosting
+- **Proxmox Hypervisors** - 10 nodes running Proxmox VE for VM/LXC hosting
 - **Servers** - Ubuntu 24.04 LTS servers with various roles (Docker, LAMP, LibreNMS, Bitwarden, etc.)
 - **Workstations/Desktops** - Ubuntu 24.04, PopOS, Debian desktop machines
 - **Raspberry Pi/ARM** - Pi and ARM-based SBCs for services like DNS
-- **Surveillance System** - Dedicated surveillance infrastructure
-- **Kubernetes** - K3s clusters on Proxmox
+- **Surveillance System** - Dedicated surveillance infrastructure (Frigate)
 
-## Inventory Structure
+## SSH Key Strategy
 
-The `inventory` file is the core of the project. It defines:
+**Single SSH Key for All Systems** ✅
+
+This homelab uses a single SSH key (`~/.ssh/ansible`) to manage all infrastructure. This approach provides:
+
+- **Simplicity**: One key to manage everything
+- **Efficiency**: Easy rotation and updates
+- **Security**: Single point of control (store securely)
+- **Consistency**: Same authentication across all hosts
+
+### Key Configuration
+
+**Location**: `~/.ssh/ansible` (private key)  
+**Public Key**: `~/.ssh/ansible.pub` (distributed to all hosts)
+
+**Exception**: One workstation uses a user-specific key:
+```ini
+172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
+```
+
+This exception is for a non-standard user on one specific machine.
+
+### Setting Up SSH Keys
+
+See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for comprehensive instructions on:
+- Generating SSH keys
+- Pushing public keys to managed hosts
+- Managing key permissions
+- Troubleshooting SSH connectivity
+
+---
 
 1. **Host Groups** - Logical groupings for easy targeting
 2. **Host Variables** - Per-host configuration (SSH user, private keys, etc.)
@@ -36,10 +64,8 @@ The `inventory` file is the core of the project. It defines:
 │   └── 172.16.0.24
 ├── [proxmox]                    # Hypervisors (root access)
 │   ├── sapve01 (ansible_user=root)
-│   ├── sapve02
-│   ├── sapve03
-│   ├── sapve04
-│   ├── sapve05
+│   ├── sapve02-05
+│   ├── sapve07-09
 │   ├── sapvethebeast
 │   └── pve
 ├── [docker]                     # Docker-capable hosts
@@ -50,14 +76,12 @@ The `inventory` file is the core of the project. It defines:
 │   └── cipi
 ├── [bitwarden]                  # Bitwarden servers
 │   └── 172.16.1.93
+├── [surveillance]               # Frigate video surveillance
+│   └── 172.16.0.93
 ├── [master]                     # Ansible control node
 │   └── 172.16.0.60
-├── [setup]                      # New machines awaiting bootstrap
-│   ├── 172.16.2.106
-│   ├── 172.16.2.107
-│   └── (5 hosts total)
-└── [k3s-sapve01]                # Kubernetes cluster nodes
-    └── (5 hosts)
+└── [setup]                      # New machines awaiting bootstrap
+    └── (5+ hosts)
 ```
 
 ### Design Patterns
@@ -65,6 +89,12 @@ The `inventory` file is the core of the project. It defines:
 #### Multi-role Hosts
 - A single host can be in multiple groups (e.g., a Docker server is in both `docker` and `ubuntu`)
 - This allows targeting by OS, role, or specific service
+
+#### Test/Staging Group
+- Use the `[test]` group to test new playbooks and configurations
+- Test group machines are isolated from production
+- Perfect for validating changes before rolling out to all machines
+- Example: Test a Docker playbook on one machine before running on all docker hosts
 
 #### IP vs DNS Names
 - IP addresses: Used for infrastructure not yet with DNS names
@@ -102,7 +132,6 @@ Playbooks are organized by function:
 - **ntp.yml** - NTP time synchronization
 
 ### Specialized
-- **k3s-cluster-*.yml** - Kubernetes cluster creation
 - **speedtest.yml** - Run speedtest-cli if available
 - **ansible.yml** - Install Ansible on control nodes
 
@@ -240,7 +269,7 @@ sapve01_user=root@pam
 
 ## Future Improvements
 
-1. **Surveillance Group**: Add dedicated surveillance machines group
+1. **Surveillance Group**: Better organization of surveillance machines
 2. **Environment Separation**: Separate production vs. test groups
 3. **Monitoring**: Add monitoring/alerting infrastructure group
 4. **Backup Group**: Centralize backup storage hosts

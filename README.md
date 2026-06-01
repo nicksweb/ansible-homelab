@@ -42,12 +42,11 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 This homelab manages multiple types of infrastructure:
 
-- **Proxmox Hypervisors** (5+ nodes) - VirtualEnvironment for VMs and LXC containers
+- **Proxmox Hypervisors** (10 nodes) - VirtualEnvironment for VMs and LXC containers
 - **Servers** - Ubuntu 24.04 LTS (Docker, LAMP, LibreNMS, Bitwarden, etc.)
 - **Workstations/Desktops** - Ubuntu 24.04, PopOS, Debian for daily work
 - **Raspberry Pi/ARM** - DNS servers, IoT devices
-- **Kubernetes** - K3s clusters on Proxmox infrastructure
-- **Surveillance** - (TODO: Add surveillance system support)
+- **Surveillance** - Frigate video surveillance system
 
 ---
 
@@ -60,15 +59,17 @@ This homelab manages multiple types of infrastructure:
 
 ### Machine Management
 - ✅ Bootstrap new machines (users, SSH, sudo, build tools)
+- ✅ Onboard new machines with complete setup (networking, SSH hardening, monitoring)
 - ✅ Install and configure Docker on hosts
 - ✅ LAMP stack setup (Apache, MySQL/MariaDB, PHP)
 - ✅ NTP time synchronization
 - ✅ Ansible/Jekyll/Bitwarden setup
+- ✅ Test group for safe testing before production changes
 
 ### Infrastructure
-- ✅ Kubernetes cluster creation (K3s)
 - ✅ Network diagnostics (speedtest, ping, connectivity)
 - ✅ Graceful shutdown of machines
+- ✅ NTP synchronization across infrastructure
 
 ---
 
@@ -112,12 +113,13 @@ ansible-homelab/
 │   ├── docker.yml        # Docker setup
 │   ├── lamp.yml          # LAMP stack
 │   ├── jekyll.yml        # Jekyll setup
-│   ├── k3s-*.yml         # Kubernetes setup
 │   └── roles/            # Reusable roles
 ├── GETTING_STARTED.md    # Quick reference (START HERE!)
+├── SETUP_ANSIBLE_HOST.md # Setting up Ansible control node
 ├── ARCHITECTURE.md       # Design and organization
 ├── PLAYBOOKS_REFERENCE.md # All playbooks documented
 ├── QUICK_COMMANDS.md     # 80+ one-liner examples
+├── SSH_REFERENCE.md      # SSH configuration reference
 └── README.md             # This file
 ```
 
@@ -236,9 +238,11 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Quick reference for common tasks (START HERE!) |
+| [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) | Setting up a new Ansible control node |
 | [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 80+ copy-paste ready commands |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design, structure, and best practices |
 | [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) | Detailed documentation for all playbooks |
+| [SSH_REFERENCE.md](SSH_REFERENCE.md) | SSH configuration and key management |
 | [inventory](inventory) | Current machine definitions |
 | [inventory.organized](inventory.organized) | Better organized inventory template |
 
@@ -291,7 +295,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
 
 ## 📝 Future Improvements
 
-- [ ] Add Surveillance system infrastructure group
+- [ ] Better surveillance system organization
 - [ ] Implement Ansible vault for sensitive credentials
 - [ ] Separate inventory by environment (prod/test)
 - [ ] Add monitoring/alerting infrastructure
@@ -322,5 +326,5 @@ This is a personal homelab, but feel free to fork and adapt for your own needs!
 
 **Last Updated**: June 2026  
 **Documentation Version**: 1.0  
-**Total Playbooks**: 17  
-**Documented Commands**: 80+ 
+**Total Playbooks**: 16  
+**Documented Commands**: 90+ 

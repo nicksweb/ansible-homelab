@@ -6,7 +6,9 @@ Welcome back! This guide helps you quickly get up to speed.
 
 ### Prerequisites
 - Ensure you have the SSH key configured: `~/.ssh/ansible`
+- This single key manages all systems in your homelab
 - Run `ansible-galaxy install -r requirements.yml` to install required roles
+- For detailed control node setup, see [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md)
 
 ### Most Common Tasks
 
@@ -86,11 +88,30 @@ ansible-homelab/
 1. **Check machine status**: `ansible -i inventory all -m ping`
 2. **See what needs updating**: Review the inventory file to see what's there
 3. **Run updates if needed**: `ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK`
-4. **Add new machines**: Edit inventory, run bootstrap if needed
+4. **Add new machines**: Edit inventory, run setup-onboard if needed
 5. **Gather information**: Run specific playbooks or ad-hoc commands
+
+## Testing Workflow Before Production Changes
+
+When you want to test a playbook before running it on production:
+
+1. **Add test machine to `[test]` group** in inventory
+2. **Run with `--check` first** (dry-run):
+   ```bash
+   ansible-playbook playbooks/docker.yml -i inventory -kK --limit "test" --check
+   ```
+3. **Run on test machine**:
+   ```bash
+   ansible-playbook playbooks/docker.yml -i inventory -kK --limit "test"
+   ```
+4. **Verify test results**, then run on production group:
+   ```bash
+   ansible-playbook playbooks/docker.yml -i inventory -kK --limit "docker"
+   ```
 
 ### Help & More Info
 
+- See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for setting up a new control node
 - See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design explanation
 - See [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) for all playbooks
 - See [QUICK_COMMANDS.md](QUICK_COMMANDS.md) for one-liner examples
