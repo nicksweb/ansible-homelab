@@ -1,0 +1,116 @@
+# Getting Started with Ansible Homelab
+
+## Quick Reference - Return after 2-6 months?
+
+Welcome back! This guide helps you quickly get up to speed.
+
+### Prerequisites
+- Ensure you have the SSH key configured: `~/.ssh/ansible`
+- Run `ansible-galaxy install -r requirements.yml` to install required roles
+
+### Most Common Tasks
+
+#### 1. Update all Linux machines
+```bash
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "linux"
+```
+This updates and upgrades all Linux hosts in your inventory, with automatic reboot if kernel was updated.
+
+#### 2. Gather facts/info from all machines
+```bash
+ansible -i inventory all -m gather_facts > homelab_facts.json
+```
+
+#### 3. Run commands on specific groups
+```bash
+# On all Docker servers
+ansible -i inventory docker -m command -a "docker ps"
+
+# On all Proxmox hosts
+ansible -i inventory proxmox -m command -a "hostname"
+
+# On all Ubuntu machines
+ansible -i inventory ubuntu -m command -a "lsb_release -a"
+```
+
+#### 4. Bootstrap new machines
+First add the machine to the `setup` group in the inventory file, then:
+```bash
+ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
+```
+
+#### 5. Get status of all machines
+```bash
+ansible -i inventory all -m ping
+```
+
+### Directory Structure
+
+```
+ansible-homelab/
+├── inventory              # Machine definitions (EDIT THIS to add/remove hosts)
+├── ansible.cfg           # Ansible configuration
+├── playbooks/            # All playbooks for various tasks
+│   ├── linux_apt-upgrade.yml     # Update/upgrade all Linux
+│   ├── bootstrap.yml             # Bootstrap new machines
+│   ├── docker.yml                # Docker setup
+│   ├── lamp.yml                  # LAMP stack setup
+│   ├── jekyll.yml                # Jekyll setup
+│   ├── k3s-cluster-*.yml         # Kubernetes cluster setup
+│   └── roles/            # Reusable roles
+├── GETTING_STARTED.md    # This file!
+├── ARCHITECTURE.md       # How it's organized
+├── PLAYBOOKS_REFERENCE.md # Details on all playbooks
+└── QUICK_COMMANDS.md     # Common one-liners
+```
+
+### Key Concepts
+
+**Inventory Groups** - All your machines are organized into groups in the `inventory` file:
+- `proxmox` - All Proxmox hypervisors
+- `servers` - Server-class machines (Docker, LAMP, LibreNMS, etc.)
+- `workstations` - Desktop/workstation machines
+- `ubuntu` / `debian` - By OS
+- `docker` - Machines running Docker
+- `raspberrypi` / ARM machines
+- `linux` - Parent group containing all Linux machines
+
+**Playbooks** - YAML files that define what to do:
+- Use them with: `ansible-playbook <playbook> -i inventory [options]`
+- Add `-l <group>` to limit to specific machines
+- Add `-k` to prompt for SSH password
+- Add `-K` to prompt for sudo password
+
+### Typical Workflow When You Return
+
+1. **Check machine status**: `ansible -i inventory all -m ping`
+2. **See what needs updating**: Review the inventory file to see what's there
+3. **Run updates if needed**: `ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK`
+4. **Add new machines**: Edit inventory, run bootstrap if needed
+5. **Gather information**: Run specific playbooks or ad-hoc commands
+
+### Help & More Info
+
+- See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design explanation
+- See [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) for all playbooks
+- See [QUICK_COMMANDS.md](QUICK_COMMANDS.md) for one-liner examples
+
+### Common Issues
+
+**"Host unreachable"**
+- Check SSH key is correct: `ssh -i ~/.ssh/ansible user@host`
+- Check firewall allows SSH (port 22)
+- Verify host is online and IP is correct
+
+**"Permission denied"**
+- If using password auth: add `-k` flag
+- If sudo password needed: add `-K` flag
+
+**"No module named python3"**
+- The `ansible_python_interpreter=/usr/bin/python3` setting in inventory handles this
+- If you get errors, check Python is installed: `ansible -i inventory <host> -m command -a "python3 --version"`
+
+---
+
+**Last updated**: June 2026
+**Next review**: Check if all hosts still exist and update as needed

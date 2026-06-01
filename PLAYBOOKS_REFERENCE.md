@@ -1,0 +1,325 @@
+# Playbooks Reference Guide
+
+Complete documentation of all available playbooks in this homelab.
+
+## System Maintenance
+
+### linux_apt-upgrade.yml
+**Purpose**: Update and upgrade all Linux machines, with automatic reboot handling
+**Usage**:
+```bash
+# All Linux machines
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK
+
+# Specific group
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "docker"
+
+# With sudo password prompt
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -K --limit "ubuntu"
+```
+**What it does**:
+- Updates apt cache
+- Runs full distribution upgrade
+- Removes unused packages (autoremove/autoclean)
+- Checks for reboot requirement
+- Automatically reboots if kernel updated
+- Waits for machine to come back online
+
+**When to use**: Regular maintenance, patch management
+
+---
+
+### linux_apt-update.yml
+**Purpose**: Just update apt cache (no upgrades)
+**Usage**:
+```bash
+ansible-playbook playbooks/linux_apt-update.yml -i inventory -kK
+```
+**What it does**: Refreshes apt package cache only (dry-run for upgrades)
+
+---
+
+### shutdown.yml
+**Purpose**: Gracefully shutdown specified hosts
+**Usage**:
+```bash
+ansible-playbook playbooks/shutdown.yml -i inventory -k --limit "hosts_to_shutdown"
+```
+**Warning**: This shuts down machines! Be careful with the limit parameter.
+
+**When to use**: Power management, maintenance windows
+
+---
+
+## Machine Bootstrap & Setup
+
+### bootstrap.yml
+**Purpose**: Initial setup of new machines (users, SSH, sudo, build tools)
+**Hosts**: `setup` group
+**Usage**:
+```bash
+ansible-playbook playbooks/bootstrap.yml -i inventory -kK
+```
+**What it does**:
+- Prompts for password to set on new user
+- Runs bootstrap role (users, SSH hardening, packages)
+- Configures NTP
+- Installs build tools
+
+**When to use**: First time setting up a new machine from scratch
+
+**Prerequisites**:
+- Machine must be reachable via SSH
+- Must be in the `setup` group in inventory
+- Need default credentials to access initially
+
+---
+
+### nbc-bootstrap.yml
+**Purpose**: NBC-specific bootstrap (customized for specific infrastructure)
+**Usage**:
+```bash
+ansible-playbook playbooks/nbc-bootstrap.yml -i inventory -kK --limit "nbc_hosts"
+```
+**Note**: Check what this does for your specific setup
+
+---
+
+### setup.yml
+**Purpose**: Generic setup tasks (alternative to bootstrap)
+**Usage**:
+```bash
+ansible-playbook playbooks/setup.yml -i inventory -kK
+```
+
+---
+
+## Application & Service Setup
+
+### docker.yml
+**Purpose**: Install Docker and configure Docker hosts
+**Hosts**: `docker` group
+**Usage**:
+```bash
+# Setup Docker on all docker group hosts
+ansible-playbook playbooks/docker.yml -i inventory -kK
+
+# Single host by IP
+ansible-playbook playbooks/docker.yml -i inventory -kK --limit "172.16.1.243"
+```
+**What it does**:
+- Installs Docker and docker-compose
+- Configures Docker daemon
+- Sets up user permissions
+- Potentially pulls/starts containers
+
+**When to use**: Setting up new Docker hosts
+
+---
+
+### copy_docker.yml
+**Purpose**: Copy Docker-related files/configs to hosts
+**Usage**:
+```bash
+ansible-playbook playbooks/copy_docker.yml -i inventory -k --limit "docker"
+```
+**What it does**: Synchronizes Docker configs/files to target machines
+
+---
+
+### docker.yml (appears to use geerlingguy role)
+**Purpose**: Docker installation/configuration using Galaxy role
+**Usage**: Same as docker.yml above
+
+---
+
+### lamp.yml
+**Purpose**: Install LAMP stack (Linux, Apache, MySQL/MariaDB, PHP)
+**Hosts**: `lampstack` group (e.g., `cipi`)
+**Usage**:
+```bash
+ansible-playbook playbooks/lamp.yml -i inventory -kK --limit "lampstack"
+```
+**What it does**:
+- Installs Apache web server
+- Installs MariaDB/MySQL database
+- Installs PHP and extensions
+- Configures services
+
+**When to use**: Setting up web servers with database backends
+
+---
+
+### jekyll.yml
+**Purpose**: Install and configure Jekyll for static site generation
+**Usage**:
+```bash
+ansible-playbook playbooks/jekyll.yml -i inventory -kK --limit "jekyll_hosts"
+```
+**What it does**:
+- Installs Ruby, bundler
+- Installs Jekyll
+- Configures for site building
+
+**When to use**: Setting up Jekyll blog or static site servers
+
+---
+
+### ansible-role-bitwarden.yml
+**Purpose**: Install Bitwarden password manager
+**Hosts**: `bitwarden` group (172.16.1.93)
+**Usage**:
+```bash
+ansible-playbook playbooks/ansible-role-bitwarden.yml -i inventory -kK
+```
+**What it does**: Sets up Bitwarden server (self-hosted password manager)
+
+**When to use**: Initial Bitwarden setup or reconfiguration
+
+---
+
+### ntp.yml
+**Purpose**: Configure NTP (Network Time Protocol) for time synchronization
+**Usage**:
+```bash
+ansible-playbook playbooks/ntp.yml -i inventory -kK
+```
+**What it does**:
+- Installs NTP daemon
+- Configures NTP servers
+- Enables and starts service
+
+**When to use**: Ensuring all machines have synchronized time
+
+---
+
+## Kubernetes & Container Orchestration
+
+### create-k3s-cluster-sapve01.yml
+**Purpose**: Create K3s Kubernetes cluster on Proxmox VE01
+**Hosts**: `k3s-sapve01` group
+**Usage**:
+```bash
+ansible-playbook playbooks/create-k3s-cluster-sapve01.yml -i inventory -kK
+```
+**What it does**:
+- Provisions VMs on sapve01 Proxmox host
+- Installs K3s Kubernetes distribution
+- Configures cluster networking
+
+**Prerequisites**:
+- Target nodes in k3s-sapve01 group
+- Proxmox access credentials in group vars
+
+**When to use**: Initial Kubernetes cluster setup
+
+---
+
+### create-k3s-cluster-sapve01v2.yml
+**Purpose**: Alternative/updated K3s cluster creation (v2)
+**Usage**:
+```bash
+ansible-playbook playbooks/create-k3s-cluster-sapve01v2.yml -i inventory -kK
+```
+**Note**: Check which version is preferred for your setup
+
+---
+
+## Utilities & Monitoring
+
+### speedtest.yml
+**Purpose**: Run speedtest-cli on target machines
+**Usage**:
+```bash
+ansible-playbook playbooks/speedtest.yml -i inventory --limit "172.16.0.60" -kK
+```
+**What it does**: Executes speedtest if installed (requires speedtest-cli package)
+
+**When to use**: Testing network performance from various locations
+
+---
+
+### ansible.yml
+**Purpose**: Install Ansible on control nodes
+**Hosts**: `master` group (172.16.0.60)
+**Usage**:
+```bash
+ansible-playbook playbooks/ansible.yml -i inventory -kK
+```
+**What it does**: Installs Ansible using geerlingguy.ansible Galaxy role
+
+**When to use**: Setting up backup Ansible control nodes
+
+---
+
+## Utility Files
+
+### vars.yml
+**Purpose**: Variable definitions file (usually sourced by other playbooks)
+**Not typically run directly** - included by other playbooks via `vars_files`
+
+---
+
+## Extended Examples from README
+
+### From the repository examples:
+
+```bash
+# Docker specific host
+ansible-playbook playbooks/docker.yml -l 192.168.1.35 -kK -i nbc
+
+# Bootstrap setup hosts
+ansible-playbook playbooks/bootstrap.yml -l 172.16.1.223 -kK -i inventory
+
+# Run speedtest on specific machine
+speedtest.yml -i ../inventory -k -l 172.16.0.60
+```
+
+---
+
+## Common Usage Patterns
+
+### Test before running (dry-run)
+```bash
+ansible-playbook <playbook> --check -i inventory
+```
+
+### Run with specific tag
+```bash
+ansible-playbook <playbook> -i inventory -t tag_name
+```
+
+### Increase verbosity for debugging
+```bash
+ansible-playbook <playbook> -i inventory -vv  # -vvv for more verbosity
+```
+
+### Run without prompts (use defaults)
+```bash
+ansible-playbook <playbook> -i inventory --extra-vars "some_var=value"
+```
+
+### Syntax check (no execution)
+```bash
+ansible-playbook <playbook> --syntax-check
+```
+
+---
+
+## Quick Cheat Sheet
+
+| Task | Command |
+|------|---------|
+| Update all Linux | `ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK` |
+| Check connectivity | `ansible -i inventory all -m ping` |
+| Bootstrap new machine | Add to `setup` group, then run `bootstrap.yml` |
+| Setup Docker | Add to `docker` group, then run `docker.yml` |
+| Run NTP config | `ansible-playbook playbooks/ntp.yml -i inventory -kK` |
+| Gather facts | `ansible -i inventory all -m setup` |
+| Run command on group | `ansible -i inventory <group> -m command -a "your_command"` |
+
+---
+
+**Reference Version**: 1.0
+**Last Updated**: June 2026
+**Playbook Count**: 17 main playbooks
