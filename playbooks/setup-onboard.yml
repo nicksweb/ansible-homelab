@@ -195,7 +195,64 @@
       when: sshd_config.changed
 
     # ========================================================================
-    # SSH Key Generation on Host (optional)
+    # Sudo Configuration (Passwordless for Ansible user)
+    # ========================================================================
+    - name: Sudo | Create sudoers.d directory
+      file:
+        path: /etc/sudoers.d
+        state: directory
+        mode: '0755'
+
+    - name: Sudo | Enable passwordless sudo for ansible user
+      lineinfile:
+        path: /etc/sudoers.d/ansible-nopasswd
+        line: "{{ ansible_user }} ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    # ========================================================================
+    # Proxmox QEMU Guest Agent
+    # ========================================================================
+    - name: Proxmox | Check if running on Proxmox VE
+      stat:
+        path: /sys/class/dmi/id/system_manufacturer
+      register: proxmox_check
+
+    - name: Proxmox | Read system manufacturer
+      shell: cat /sys/class/dmi/id/system_manufacturer 2>/dev/null || echo "Unknown"
+      register: system_manufacturer
+      changed_when: false
+      when: proxmox_check.stat.exists
+
+    - name: Proxmox | Set Proxmox VM flag
+      set_fact:
+        is_proxmox_vm: "{{ 'Proxmox' in system_manufacturer.stdout }}"
+      when: proxmox_check.stat.exists
+
+    - name: Proxmox | Install qemu-guest-agent
+      apt:
+        name: qemu-guest-agent
+        state: present
+      when: is_proxmox_vm | default(false)
+      register: qemu_agent_installed
+
+    - name: Proxmox | Enable and start qemu-guest-agent service
+      systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      when: is_proxmox_vm | default(false)
+
+    - name: Proxmox | Verify qemu-guest-agent is running
+      shell: systemctl is-active qemu-guest-agent
+      changed_when: false
+      failed_when: false
+      register: qemu_agent_status
+      when: is_proxmox_vm | default(false)
     # ========================================================================
     - name: SSH | Create .ssh directory for ansible user
       file:
@@ -280,6 +337,19 @@
             Password Auth: Disabled
             Root Login: Disabled
           
+          Sudo Configuration:
+            Passwordless sudo: ENABLED for {{ ansible_user }}
+            Use: sudo -n command (no password required)
+          
+          {% if is_proxmox_vm | default(false) %}
+          Proxmox Integration:
+            ✓ QEMU Guest Agent: Installed
+            Status: {{ qemu_agent_status.stdout }}
+          {% else %}
+          Proxmox Integration:
+            Not detected as Proxmox VM
+          {% endif %}
+          
           {% if host_hostname is defined %}
           Hostname Updated:
             Old: {{ ansible_hostname }}
@@ -292,9 +362,10 @@
           
           Next Steps:
             1. Verify SSH connectivity: ssh {{ ansible_user }}@{{ inventory_hostname }}
-            2. Test monitoring tools: htop, bwm-ng, vnstat
-            3. Move host from 'setup' group to production group
-            4. Run other setup playbooks as needed
+            2. Test passwordless sudo: ssh {{ ansible_user }}@{{ inventory_hostname }} "sudo -n whoami"
+            3. Test monitoring tools: htop, bwm-ng, vnstat
+            4. Move host from 'setup' group to production group
+            5. Run other setup playbooks as needed
 
     - name: Check if reboot is needed
       register: reboot_required_file

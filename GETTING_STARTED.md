@@ -88,7 +88,7 @@ ansible-homelab/
 1. **Check machine status**: `ansible -i inventory all -m ping`
 2. **See what needs updating**: Review the inventory file to see what's there
 3. **Run updates if needed**: `ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK`
-4. **Add new machines**: Edit inventory, run setup-onboard if needed
+4. **Add new machines**: See [ADD_NEW_HOST.md](ADD_NEW_HOST.md) for complete step-by-step workflow
 5. **Gather information**: Run specific playbooks or ad-hoc commands
 
 ## Testing Workflow Before Production Changes
@@ -111,6 +111,7 @@ When you want to test a playbook before running it on production:
 
 ### Help & More Info
 
+- See [ADD_NEW_HOST.md](ADD_NEW_HOST.md) for complete step-by-step guide to adding new machines
 - See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for setting up a new control node
 - See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design explanation
 - See [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) for all playbooks

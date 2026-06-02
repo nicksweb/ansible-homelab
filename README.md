@@ -25,7 +25,8 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 ### For First-Time / Returning Users
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - ⭐ Start here! Quick reference and common tasks
-- **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (80+ commands)
+- **[ADD_NEW_HOST.md](ADD_NEW_HOST.md)** - ⭐ Complete workflow for adding new machines
+- **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (90+ commands)
 
 ### For Understanding the Project
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - How the infrastructure is organized and designed
@@ -238,8 +239,9 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Quick reference for common tasks (START HERE!) |
+| [ADD_NEW_HOST.md](ADD_NEW_HOST.md) | Complete workflow for adding new machines to homelab |
 | [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) | Setting up a new Ansible control node |
-| [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 80+ copy-paste ready commands |
+| [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 90+ copy-paste ready commands |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design, structure, and best practices |
 | [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) | Detailed documentation for all playbooks |
 | [SSH_REFERENCE.md](SSH_REFERENCE.md) | SSH configuration and key management |
@@ -326,5 +328,6 @@ This is a personal homelab, but feel free to fork and adapt for your own needs!
 
 **Last Updated**: June 2026  
 **Documentation Version**: 1.0  
+**Documentation Files**: 9  
 **Total Playbooks**: 16  
 **Documented Commands**: 90+ 

@@ -154,27 +154,26 @@ Roles use `defaults/main.yml` for variables and `tasks/main.yml` for implementat
 
 ## Common Workflows
 
-### Adding a New Machine
+## Adding a New Machine
 
-1. **Assign IP/hostname** in your network
-2. **Add to inventory**:
-   ```
-   [setup]
-   192.168.x.x ansible_user=root  # Or localadmin if already has sudo
-   ```
-3. **Bootstrap it**:
-   ```bash
-   ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "192.168.x.x"
-   ```
-4. **Move to appropriate group**:
-   ```
-   [ubuntu]
-   192.168.x.x
-   ```
-5. **Apply specific roles as needed**:
-   ```bash
-   ansible-playbook playbooks/docker.yml -i inventory -kK --limit "192.168.x.x"
-   ```
+See [ADD_NEW_HOST.md](../ADD_NEW_HOST.md) for the complete step-by-step workflow, which includes:
+
+1. **Prepare**: Initial access and user setup
+2. **Inventory**: Add host to appropriate groups
+3. **SSH Key**: Copy control node's public key
+4. **Bootstrap**: Run base bootstrap playbook
+5. **Onboarding**: Run comprehensive setup-onboard.yml
+6. **Verify**: Test and move to production group
+
+**Key features of the onboarding process:**
+- SSH hardening (key-only, no passwords, no root login)
+- Passwordless sudo for ansible user
+- Monitoring tools: bwm-ng, vnstat, htop
+- **Auto-detection of Proxmox VMs** with qemu-guest-agent installation
+- Optional hostname/IP configuration
+- SSH key generation on managed host
+
+---
 
 ### Batch Updates
 

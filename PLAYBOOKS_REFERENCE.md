@@ -73,10 +73,18 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 - Updates system and all packages
 - Installs monitoring tools: bwm-ng, vnstat, htop
 - Hardens SSH (key-based auth only, disables password auth, disables root login)
+- Enables **passwordless sudo** for ansible user (use `sudo -n command`)
+- **Auto-detects Proxmox VMs** and installs/enables qemu-guest-agent
 - Configures hostname (if specified)
 - Configures static IP and DNS (optional, if variables provided)
 - Generates SSH key pair on host (ed25519)
-- Provides summary of changes
+- Provides detailed summary with Proxmox status
+
+**Key Features**:
+- **Passwordless Sudo**: Ansible user can run `sudo` without password prompts
+- **Proxmox Detection**: Automatically checks if running on Proxmox and installs qemu-guest-agent
+- **Monitoring Stack**: bwm-ng for bandwidth, vnstat for network stats, htop for processes
+- **SSH Hardening**: No passwords, no root login, public key only
 
 **Variables** (optional - pass with `-e`):
 ```yaml
@@ -93,6 +101,8 @@ sshd_port: 22                          # SSH port
 ```
 
 **When to use**: Initial setup of new machines you're adding to the homelab
+
+**See also**: [ADD_NEW_HOST.md](../ADD_NEW_HOST.md) for complete workflow
 
 ---
 
