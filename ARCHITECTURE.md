@@ -12,34 +12,58 @@ This Ansible project is designed to manage a home laboratory with multiple categ
 
 ## SSH Key Strategy
 
-**Single SSH Key for All Systems** ✅
+**Per-Control-Node SSH Keys** ✅
 
-This homelab uses a single SSH key (`~/.ssh/ansible`) to manage all infrastructure. This approach provides:
+Each Ansible control node has its own SSH key pair. All managed hosts have the public keys from all control nodes in their `authorized_keys`. This approach provides:
 
-- **Simplicity**: One key to manage everything
-- **Efficiency**: Easy rotation and updates
-- **Security**: Single point of control (store securely)
-- **Consistency**: Same authentication across all hosts
+- **Multi-control support**: MacBook, desktop, etc. each have their own key
+- **Security**: No private key sharing between machines
+- **Flexibility**: Easy to add new control nodes
+- **Auditability**: Track which control node made changes
+- **Consistency**: Same authentication model across all managed hosts
 
 ### Key Configuration
 
-**Location**: `~/.ssh/ansible` (private key)  
-**Public Key**: `~/.ssh/ansible.pub` (distributed to all hosts)
+**Per Control Node**:
+```
+MacBook:    ~/.ssh/ansible (private) + ~/.ssh/ansible.pub (public)
+Desktop:    ~/.ssh/ansible (private) + ~/.ssh/ansible.pub (public)
+Raspberry:  ~/.ssh/ansible (private) + ~/.ssh/ansible.pub (public)
+```
 
-**Exception**: One workstation uses a user-specific key:
+**On Managed Hosts**:
+- All public keys from all control nodes are in `~/.ssh/authorized_keys`
+- Example:
+```bash
+echo "<MacBook public key>" >> ~/.ssh/authorized_keys
+echo "<Desktop public key>" >> ~/.ssh/authorized_keys
+echo "<Raspberry public key>" >> ~/.ssh/authorized_keys
+```
+
+**Exceptions**: 
+- One workstation (172.16.0.60) uses a user-specific key:
 ```ini
 172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
 ```
+- This is for non-standard user on one specific machine
 
-This exception is for a non-standard user on one specific machine.
+### Ansible Configuration
+
+**In ansible.cfg** on each control node:
+```ini
+[defaults]
+private_key_file = ~/.ssh/ansible
+```
+
+Each control node looks for its own `~/.ssh/ansible` key.
 
 ### Setting Up SSH Keys
 
 See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for comprehensive instructions on:
-- Generating SSH keys
-- Pushing public keys to managed hosts
+- Generating SSH keys on each control node
+- Pushing public keys from all control nodes to managed hosts
 - Managing key permissions
-- Troubleshooting SSH connectivity
+- Troubleshooting SSH connectivity with multiple control nodes
 
 ---
 

@@ -45,21 +45,20 @@ ansible --version
 
 ## Step 2: SSH Key Setup
 
-### SSH Key Strategy: One Key for All Systems
+### SSH Key Strategy: Per-Control-Node Keys
 
-For simplicity and security, we use a **single SSH key** (`~/.ssh/ansible`) to manage all systems. This is stored in `ansible.cfg`:
+Each control node (MacBook, desktop, Raspberry Pi, etc.) has its own SSH key pair. All managed hosts have the public keys from all control nodes in their `authorized_keys`. This provides:
 
-```ini
-[defaults]
-private_key_file = ~/.ssh/ansible
-```
-
-**Exception**: One workstation (172.16.0.60) uses a user-specific key - see "Per-Host Keys" below.
+- **Security**: Each control node has its own private key (never shared)
+- **Flexibility**: Easy to add new control nodes
+- **Scalability**: Works with multiple control nodes managing the same infrastructure
 
 ### Generate SSH Key (if needed)
 
+Run this on **each control node**:
+
 ```bash
-# Generate new SSH key for Ansible
+# Generate new SSH key for Ansible on this control node
 ssh-keygen -t ed25519 -f ~/.ssh/ansible -C "ansible@homelab" -N ""
 
 # Or RSA if Ed25519 not available
@@ -68,11 +67,25 @@ ssh-keygen -t rsa -b 4096 -f ~/.ssh/ansible -C "ansible@homelab" -N ""
 # Set secure permissions
 chmod 600 ~/.ssh/ansible
 chmod 644 ~/.ssh/ansible.pub
+
+# Show the public key (you'll need this for managed hosts)
+cat ~/.ssh/ansible.pub
 ```
+
+### Configure ansible.cfg on Each Control Node
+
+On each control node, ensure `ansible.cfg` has:
+
+```ini
+[defaults]
+private_key_file = ~/.ssh/ansible
+```
+
+Each control node looks for its own `~/.ssh/ansible` key.
 
 ### SSH Config for Ansible Host
 
-Add this to `~/.ssh/config` on your Ansible control host:
+Add this to `~/.ssh/config` on **each control node**:
 
 ```ssh-config
 Host *
@@ -112,7 +125,9 @@ ssh-copy-id -i ~/.ssh/ansible.pub root@sapve01
 
 ### Method 2: Automated via Ansible (Recommended)
 
-Create a playbook to push keys to multiple hosts at once:
+#### For a Single Control Node
+
+When you have one control node set up and need to distribute its public key:
 
 ```bash
 # For machines using password auth on first setup:
@@ -127,6 +142,29 @@ ansible -i inventory proxmox -m authorized_key \
   -a "user=root key='{{ lookup(\"file\", \"~/.ssh/ansible.pub\") }}' state=present" \
   -k
 ```
+
+#### For Multiple Control Nodes
+
+When adding a **second control node** (e.g., desktop after using MacBook), you need to add its public key to all managed hosts:
+
+```bash
+# On the NEW control node:
+# 1. Generate key (see Step 2 above)
+# 2. Get the public key
+cat ~/.ssh/ansible.pub
+
+# 3. Add it to all managed hosts from the NEW control node:
+ansible -i inventory all -m authorized_key \
+  -a "user=localadmin key='<paste your public key here>' state=present" \
+  -k
+
+# For root users:
+ansible -i inventory proxmox -m authorized_key \
+  -a "user=root key='<paste your public key here>' state=present" \
+  -k
+```
+
+Now **both** control nodes can manage all hosts!
 
 ### Method 3: Script for Bulk Setup
 
@@ -265,42 +303,102 @@ interpreter_python = /usr/bin/python3
 
 ## Adding a New Control Node
 
-When setting up an additional Ansible control node:
+When setting up an additional Ansible control node (e.g., desktop after MacBook, or new workstation):
 
-1. **Generate new SSH key** (or copy existing if shared):
+### Step 1: Set Up on New Control Node
+
+```bash
+# Follow the setup steps above:
+# 1. Install Ansible
+# 2. Generate its own SSH key
+ssh-keygen -t ed25519 -f ~/.ssh/ansible -C "ansible@homelab-$(hostname)" -N ""
+
+# 3. Clone repository
+git clone https://github.com/nicksweb/ansible-homelab.git
+cd ansible-homelab
+ansible-galaxy install -r requirements.yml
+
+# 4. Configure ansible.cfg (already set up in repo)
+```
+
+### Step 2: Add New Control Node's Public Key to All Managed Hosts
+
+On the **new control node**, add its public key to all managed hosts:
+
+```bash
+# Get this control node's public key
+cat ~/.ssh/ansible.pub
+
+# Add it to all managed hosts
+ansible -i inventory all -m authorized_key \
+  -a "user=localadmin key='{{ lookup(\"file\", \"~/.ssh/ansible.pub\") }}' state=present" \
+  -k  # Prompts for SSH password
+
+# For Proxmox and root users:
+ansible -i inventory proxmox -m authorized_key \
+  -a "user=root key='{{ lookup(\"file\", \"~/.ssh/ansible.pub\") }}' state=present" \
+  -k
+```
+
+**Alternative: Manual distribution**
+
+If the new control node can't reach managed hosts yet:
+
+1. Get the new key's public key content:
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/ansible -C "ansible@homelab-backup" -N ""
+   cat ~/.ssh/ansible.pub
    ```
 
-2. **Push key to all managed hosts**:
+2. From an existing control node, add it manually:
    ```bash
-   # From new control host
-   cd ansible-homelab
-   ansible-playbook playbooks/setup-ssh-keys.yml -k
-   # (Use script or manual ssh-copy-id as shown above)
+   # On existing control node
+   NEWKEY=\"paste_the_public_key_here\"
+   ansible -i inventory all -m authorized_key \
+     -a \"user=localadmin key='$NEWKEY' state=present\"
+   
+   ansible -i inventory proxmox -m authorized_key \
+     -a \"user=root key='$NEWKEY' state=present\"
    ```
 
-3. **Test connectivity**:
-   ```bash
-   ansible -i inventory all -m ping
-   ```
+### Step 3: Test New Control Node
 
-4. **Add control node to inventory** (optional, if you want to manage the control node itself):
-   ```ini
-   [control_nodes]
-   172.16.0.60 ansible_user=nicholaso
-   ```
+```bash
+# From the new control node
+ansible -i inventory all -m ping
+```
+
+### Step 4: Add Control Node to Inventory (Optional)
+
+If you want to manage the control node itself:
+
+```ini
+[control_nodes]
+macbook.local ansible_user=localadmin
+desktop.local ansible_user=localadmin
+```
+
+**Each control node now has:**
+- Its own `~/.ssh/ansible` private key
+- Permission to manage all hosts (public key in their authorized_keys)
+- Independent setup (losing one doesn't break others)
 
 ---
 
 ## Security Best Practices
 
-1. **Use one SSH key for all systems** ✅ (current setup)
-   - Simpler to manage
-   - Easier to rotate all at once
-   - Store securely with restricted permissions
+1. **Per-Control-Node SSH Keys** ✅ (current setup)
+   - Each control node has its own private key
+   - Never share private keys between machines
+   - Easier to revoke access from a single control node if needed
+   - Better auditability (track which machine made changes)
 
-2. **SSH Key Permissions**:
+2. **Multiple Control Nodes**:
+   - All managed hosts have public keys from ALL control nodes in `authorized_keys`
+   - Each control node operates independently
+   - Losing one control node doesn't affect others
+   - Adding new control nodes just requires adding its public key to managed hosts
+
+3. **SSH Key Permissions**:
    ```bash
    chmod 600 ~/.ssh/ansible          # Private key
    chmod 644 ~/.ssh/ansible.pub      # Public key
@@ -308,13 +406,13 @@ When setting up an additional Ansible control node:
    chmod 600 ~/.ssh/authorized_keys  # On remote hosts
    ```
 
-3. **SSH Agent** (optional, for frequently-used keys):
+4. **SSH Agent** (optional, for frequently-used keys):
    ```bash
    ssh-add ~/.ssh/ansible
    # Now SSH uses the key without typing passphrase
    ```
 
-4. **Consider SSH Key Passphrase**:
+5. **Consider SSH Key Passphrase**:
    ```bash
    # If you want to add passphrase to existing key:
    ssh-keygen -p -f ~/.ssh/ansible -N "newpassphrase"
