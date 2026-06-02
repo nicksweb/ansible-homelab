@@ -1,5 +1,4 @@
 # from galaxy
-- src: geerlingguy.ntp
 - src: geerlingguy.docker
 - src: geerlingguy.apache-php-fpm
 - src: geerlingguy.apache

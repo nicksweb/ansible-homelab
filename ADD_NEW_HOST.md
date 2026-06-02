@@ -215,7 +215,7 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
 
 ## Stage 5: Run Onboarding Playbook
 
-The onboarding playbook handles hardening, monitoring, and Proxmox setup:
+The onboarding playbook handles hardening, monitoring, Proxmox setup, and system configuration:
 
 ### Step 5.1: Basic Onboarding
 
@@ -224,13 +224,15 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "docker-01
 ```
 
 **What it does:**
+- Sets timezone to Australia/Brisbane
+- Configures NTP with Chrony and Australian pool (au.pool.ntp.org)
 - Updates and upgrades system packages
 - Installs monitoring: bwm-ng, vnstat, htop
 - Hardens SSH (key-only, no passwords, no root login)
 - Enables passwordless sudo for ansible user
 - **Auto-detects Proxmox VMs and installs qemu-guest-agent**
 - Generates SSH keys on the host
-- Provides detailed summary
+- Provides detailed summary showing timezone, NTP, and Proxmox status
 
 ### Step 5.2: Onboarding with Network Configuration
 
@@ -262,6 +264,14 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 ```bash
 # Check it responds to ping
 ansible -i inventory docker-01 -m ping
+
+# Verify timezone is set
+ansible -i inventory docker-01 -m command -a "timedatectl show --property=Timezone --value"
+# Should output: Australia/Brisbane
+
+# Verify NTP synchronization
+ansible -i inventory docker-01 -m command -a "chronyc tracking"
+# Should show synchronized time
 
 # Verify monitoring tools installed
 ansible -i inventory docker-01 -m shell -a "which htop bwm-ng vnstat"

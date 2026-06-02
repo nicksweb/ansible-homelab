@@ -218,6 +218,48 @@ ansible -i inventory proxmox -m shell -a "qm list"
 ansible -i inventory proxmox -m shell -a "pvecm status"
 ```
 
+## Timezone & NTP Operations
+
+### Check timezone on all machines
+```bash
+ansible -i inventory all -m command -a "timedatectl show --property=Timezone --value"
+```
+
+### Check timezone on specific group
+```bash
+ansible -i inventory docker -m command -a "timedatectl show --property=Timezone --value"
+```
+
+### Check full time synchronization status
+```bash
+ansible -i inventory all -m command -a "timedatectl status"
+```
+
+### Check NTP status with Chrony
+```bash
+ansible -i inventory all -m command -a "chronyc tracking"
+```
+
+### Check NTP sources (which servers we're using)
+```bash
+ansible -i inventory all -m command -a "chronyc sources"
+```
+
+### Configure NTP on all machines (Australia/Brisbane timezone, au.pool.ntp.org)
+```bash
+ansible-playbook playbooks/ntp.yml -i inventory -kK
+```
+
+### Configure NTP on specific group only
+```bash
+ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "ubuntu"
+```
+
+### Restart NTP service on all machines
+```bash
+ansible -i inventory all -m systemd -a "name=chrony state=restarted daemon_reload=yes" -b
+```
+
 ## Playbook Execution
 
 ### Run with dry-run (check mode)

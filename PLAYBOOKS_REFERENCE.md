@@ -54,7 +54,7 @@ ansible-playbook playbooks/shutdown.yml -i inventory -k --limit "hosts_to_shutdo
 ## Machine Bootstrap & Setup
 
 ### setup-onboard.yml
-**Purpose**: Comprehensive onboarding of new machines with SSH hardening, networking, and monitoring
+**Purpose**: Comprehensive onboarding of new machines with SSH hardening, networking, timezone, NTP, and monitoring
 **Hosts**: `setup` group (or any new machine)
 **Usage**:
 ```bash
@@ -71,6 +71,8 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 
 **What it does**:
 - Updates system and all packages
+- **Sets timezone to Australia/Brisbane**
+- **Configures Chrony NTP with Australian pool** (au.pool.ntp.org servers)
 - Installs monitoring tools: bwm-ng, vnstat, htop
 - Hardens SSH (key-based auth only, disables password auth, disables root login)
 - Enables **passwordless sudo** for ansible user (use `sudo -n command`)
@@ -78,9 +80,10 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 - Configures hostname (if specified)
 - Configures static IP and DNS (optional, if variables provided)
 - Generates SSH key pair on host (ed25519)
-- Provides detailed summary with Proxmox status
+- Provides detailed summary with Proxmox, timezone, and NTP status
 
 **Key Features**:
+- **Timezone & NTP**: Australia/Brisbane timezone with Chrony syncing to au.pool.ntp.org
 - **Passwordless Sudo**: Ansible user can run `sudo` without password prompts
 - **Proxmox Detection**: Automatically checks if running on Proxmox and installs qemu-guest-agent
 - **Monitoring Stack**: bwm-ng for bandwidth, vnstat for network stats, htop for processes
@@ -98,6 +101,12 @@ host_dns_servers:                      # DNS servers
 host_interface: eth0                  # Network interface (auto-detected if not set)
 generate_ssh_key: true                 # Generate SSH key on host
 sshd_port: 22                          # SSH port
+ntp_timezone: Australia/Brisbane       # Timezone
+ntp_servers:                           # NTP servers list
+  - 0.au.pool.ntp.org
+  - 1.au.pool.ntp.org
+  - 2.au.pool.ntp.org
+  - 3.au.pool.ntp.org
 ```
 
 **When to use**: Initial setup of new machines you're adding to the homelab
@@ -107,7 +116,7 @@ sshd_port: 22                          # SSH port
 ---
 
 ### bootstrap.yml
-**Purpose**: Initial setup of new machines (users, SSH, sudo, build tools)
+**Purpose**: Initial setup of new machines (users, SSH, sudo, build tools, timezone, NTP)
 **Hosts**: `setup` group
 **Usage**:
 ```bash
@@ -116,8 +125,17 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK
 **What it does**:
 - Prompts for password to set on new user
 - Runs bootstrap role (users, SSH hardening, packages)
-- Configures NTP
+- **Sets timezone to Australia/Brisbane**
+- **Installs and configures Chrony NTP daemon** with Australian pool (au.pool.ntp.org)
 - Installs build tools
+
+**NTP Configuration**:
+- Uses Chrony daemon (more robust than ntpd)
+- Configured with Australian NTP pool:
+  - 0.au.pool.ntp.org
+  - 1.au.pool.ntp.org
+  - 2.au.pool.ntp.org
+  - 3.au.pool.ntp.org
 
 **When to use**: First time setting up a new machine from scratch
 
@@ -232,17 +250,48 @@ ansible-playbook playbooks/ansible-role-bitwarden.yml -i inventory -kK
 ---
 
 ### ntp.yml
-**Purpose**: Configure NTP (Network Time Protocol) for time synchronization
+**Purpose**: Configure NTP (Network Time Protocol) and timezone using Chrony daemon
 **Usage**:
 ```bash
+# Configure all hosts
 ansible-playbook playbooks/ntp.yml -i inventory -kK
-```
-**What it does**:
-- Installs NTP daemon
-- Configures NTP servers
-- Enables and starts service
 
-**When to use**: Ensuring all machines have synchronized time
+# Configure specific group
+ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "ubuntu"
+
+# Configure single host
+ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "172.16.1.100"
+```
+
+**What it does**:
+- Sets timezone to Australia/Brisbane
+- Installs Chrony NTP daemon
+- Configures Chrony with Australian NTP pool (au.pool.ntp.org)
+- Enables and starts Chrony service
+- Verifies time synchronization status
+
+**NTP Servers**:
+- 0.au.pool.ntp.org
+- 1.au.pool.ntp.org
+- 2.au.pool.ntp.org
+- 3.au.pool.ntp.org
+
+**Chrony Benefits**:
+- Better handling of unstable networks
+- Faster synchronization
+- Works with both server and embedded systems
+- More robust than traditional ntpd
+
+**Verification**:
+```bash
+# Check timezone
+ansible -i inventory all -m command -a "timedatectl show --property=Timezone --value"
+
+# Check NTP status
+ansible -i inventory all -m command -a "chronyc tracking"
+```
+
+**When to use**: Setting up time synchronization for all machines in the homelab
 
 ---
 
