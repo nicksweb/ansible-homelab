@@ -5,7 +5,7 @@
   vars:
     sapve01_host: "172.16.0.70:8006"
     sapve01_user: "root@pam"
-    sapve01_password: "213hex4817"
+    sapve01_password: "REDACTED"
     sapve01_node: "sapve01"
     ansible_python_interpreter: /usr/bin/python3
   tasks:
@@ -22,7 +22,7 @@
 #        storage: "SamsungNVME01"
 #        onboot: yes
         api_user: "root@pam"
-        api_password: "213hex4817"
+        api_password: "REDACTED"
         api_host: "172.16.0.70:8006"
         vmid: "{{ item.newid }}"
         node: "sapve01"

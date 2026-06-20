@@ -80,7 +80,7 @@ thebox
 #[k3s-sapve01:vars]
 #sapve01_host=https://172.16.0.70:8006
 #sapve01_user=root@pam
-#sapve01_password=213hex4817
+#sapve01_password=REDACTED
 #sapve01_node=SAPVE01
 
 [master]
