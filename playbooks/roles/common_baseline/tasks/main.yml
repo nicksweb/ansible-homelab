@@ -1,0 +1,27 @@
+---
+- name: Check control-node public key
+  ansible.builtin.stat:
+    path: "{{ common_authorized_key_file }}"
+  delegate_to: localhost
+  become: false
+  register: common_public_key
+
+- name: Require the control-node public key
+  ansible.builtin.assert:
+    that: common_public_key.stat.exists
+    fail_msg: "Public key not found: {{ common_authorized_key_file }}"
+  delegate_to: localhost
+  become: false
+
+- name: Authorize the Ansible control node
+  ansible.posix.authorized_key:
+    user: "{{ common_authorized_key_user }}"
+    key: "{{ lookup('file', common_authorized_key_file) }}"
+    state: present
+    manage_dir: true
+  become: false
+
+- name: Set system timezone
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+  become: true

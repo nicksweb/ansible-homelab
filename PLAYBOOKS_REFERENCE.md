@@ -185,6 +185,31 @@ The generated file is validated with `visudo` before installation. Hosts connect
 
 ---
 
+### site-baseline.yml
+**Purpose**: Apply the shared control-node SSH key and timezone to managed hosts
+**Defaults**: `Australia/Brisbane` and `~/.ssh/ansible.pub`
+```bash
+# First run when SSH and sudo still require passwords
+ansible-playbook playbooks/site-baseline.yml \
+  --limit "hostname" --ask-pass --ask-become-pass
+
+# Apply the baseline to all reachable hosts after key/sudo setup
+ansible-playbook playbooks/site-baseline.yml
+```
+Override the timezone with `-e common_timezone=Region/City` or the public key path with the `ANSIBLE_PUBLIC_KEY_FILE` environment variable.
+
+---
+
+### desktop-workstation.yml
+**Purpose**: Configure an Ubuntu/Debian desktop with the shared baseline, desktop packages, Flatpaks, SSH service, and optional mounts
+```bash
+ansible-playbook playbooks/desktop-workstation.yml \
+  --limit "desktop01" --ask-pass --ask-become-pass
+```
+Optional variables include `desktop_hostname`, `desktop_config_repo`, `desktop_mounts`, `desktop_upgrade_packages`, and `desktop_enable_pdfarranger_ppa`. Mount credentials belong in Ansible Vault, never the repository.
+
+---
+
 ## Application & Service Setup
 
 ### docker.yml

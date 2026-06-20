@@ -137,6 +137,22 @@ ansible app01 -b -m command -a 'whoami'
 
 The expected result is `root` without a password prompt.
 
+## Applying the shared host baseline
+
+The common baseline installs the control node's public key for `ansible_user`
+and sets the host timezone to `Australia/Brisbane`:
+
+```bash
+ansible-playbook playbooks/site-baseline.yml \
+  --limit hostname --ask-pass --ask-become-pass
+```
+
+After initial access is configured, apply it to all reachable hosts with:
+
+```bash
+ansible-playbook playbooks/site-baseline.yml
+```
+
 ## Connectivity checks
 
 ### Internet speed tests

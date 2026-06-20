@@ -115,6 +115,8 @@ ansible-homelab/
 ├── playbooks/            # All automation playbooks
 │   ├── *-apt-*.yml      # System updates/upgrades
 │   ├── bootstrap.yml     # Bootstrap new machines
+│   ├── site-baseline.yml # Shared SSH key and timezone
+│   ├── desktop-workstation.yml # Desktop packages and Flatpaks
 │   ├── docker.yml        # Docker setup
 │   ├── lamp.yml          # LAMP stack
 │   ├── jekyll.yml        # Jekyll setup
@@ -337,6 +339,6 @@ This is a personal homelab, but feel free to fork and adapt for your own needs!
 
 **Documentation Files**: 10
 
-**Total Top-Level Playbooks**: 18
+**Total Top-Level Playbooks**: 20
 
 **Documented Commands**: 80+

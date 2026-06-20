@@ -1,0 +1,6 @@
+---
+common_timezone: Australia/Brisbane
+common_authorized_key_user: "{{ ansible_user }}"
+common_authorized_key_file: >-
+  {{ lookup('env', 'ANSIBLE_PUBLIC_KEY_FILE') |
+     default(lookup('env', 'HOME') + '/.ssh/ansible.pub', true) }}

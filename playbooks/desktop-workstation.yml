@@ -1,0 +1,161 @@
+---
+- name: Configure Linux desktop workstation
+  hosts: workstations
+  gather_facts: true
+
+  vars:
+    desktop_user: "{{ ansible_user }}"
+    desktop_upgrade_packages: true
+    desktop_enable_pdfarranger_ppa: false
+    desktop_hostname: ""
+    desktop_config_repo: ""
+    desktop_config_version: main
+    desktop_mount_root: "/media/{{ desktop_user }}/shared"
+    desktop_mount_directories:
+      - Media
+      - Photos
+      - Scans
+      - Shared
+      - Backups
+      - Archive
+      - Downloads
+    desktop_mounts: []
+    desktop_packages:
+      - bwm-ng
+      - flatpak
+      - git
+      - htop
+      - openssh-server
+      - pdfarranger
+      - python3
+      - remmina
+      - snapd
+      - speedtest-cli
+      - syncthing
+      - tmux
+    desktop_flatpak_apps:
+      - com.github.IsmaelMartinez.teams_for_linux
+      - com.obsproject.Studio
+      - com.transmissionbt.Transmission
+      - com.visualstudio.code
+      - org.chromium.Chromium
+      - org.filezillaproject.Filezilla
+      - org.flameshot.Flameshot
+      - org.gimp.GIMP
+      - org.gnome.DejaDup
+      - org.kde.kdenlive
+      - org.mozilla.Thunderbird
+      - org.remmina.Remmina
+      - org.videolan.VLC
+
+  pre_tasks:
+    - name: Apply shared key and timezone baseline
+      ansible.builtin.include_role:
+        name: common_baseline
+
+  tasks:
+    - name: Enable optional PDF Arranger PPA
+      ansible.builtin.apt_repository:
+        repo: ppa:linuxuprising/apps
+        state: present
+      become: true
+      when: desktop_enable_pdfarranger_ppa | bool
+
+    - name: Update package cache and upgrade installed packages
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        upgrade: safe
+      become: true
+      when: desktop_upgrade_packages | bool
+
+    - name: Install desktop packages
+      ansible.builtin.apt:
+        name: "{{ desktop_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+
+    - name: Enable SSH service
+      ansible.builtin.service:
+        name: ssh
+        state: started
+        enabled: true
+      become: true
+
+    - name: Configure Flathub for the desktop user
+      community.general.flatpak_remote:
+        name: flathub
+        flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+        method: user
+        state: present
+      become: false
+
+    - name: Install desktop Flatpaks for the desktop user
+      community.general.flatpak:
+        name: "{{ desktop_flatpak_apps }}"
+        method: user
+        state: present
+      become: false
+
+    - name: Set optional desktop hostname
+      ansible.builtin.hostname:
+        name: "{{ desktop_hostname }}"
+      become: true
+      when: desktop_hostname | length > 0
+
+    - name: Ensure Documents directory exists
+      ansible.builtin.file:
+        path: "/home/{{ desktop_user }}/Documents"
+        state: directory
+        owner: "{{ desktop_user }}"
+        group: "{{ desktop_user }}"
+        mode: '0750'
+      become: true
+
+    - name: Clone optional private desktop configuration repository
+      ansible.builtin.git:
+        repo: "{{ desktop_config_repo }}"
+        dest: "/home/{{ desktop_user }}/Documents/DesktopConfig"
+        version: "{{ desktop_config_version }}"
+        update: true
+      become: false
+      when: desktop_config_repo | length > 0
+
+    - name: Create mount root
+      ansible.builtin.file:
+        path: "{{ desktop_mount_root }}"
+        state: directory
+        owner: "{{ desktop_user }}"
+        group: "{{ desktop_user }}"
+        mode: '0755'
+      become: true
+
+    - name: Create mount directories
+      ansible.builtin.file:
+        path: "{{ desktop_mount_root }}/{{ item }}"
+        state: directory
+        owner: "{{ desktop_user }}"
+        group: "{{ desktop_user }}"
+        mode: '0755'
+      become: true
+      loop: "{{ desktop_mount_directories }}"
+
+    - name: Configure optional persistent mounts
+      ansible.posix.mount:
+        path: "{{ item.path }}"
+        src: "{{ item.src }}"
+        fstype: "{{ item.fstype }}"
+        opts: "{{ item.opts | default('defaults') }}"
+        state: mounted
+      become: true
+      loop: "{{ desktop_mounts }}"
+      no_log: true
+
+    - name: Show remaining interactive desktop settings
+      ansible.builtin.debug:
+        msg:
+          - Enable GNOME Remote Desktop and Remote Login if required.
+          - Configure automatic login only if the physical-security risk is acceptable.
+          - Store mount credentials with Ansible Vault; never commit them to Git.

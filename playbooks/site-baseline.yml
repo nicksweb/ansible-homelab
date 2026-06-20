@@ -1,0 +1,7 @@
+---
+- name: Apply common baseline to managed hosts
+  hosts: all
+  gather_facts: false
+
+  roles:
+    - role: common_baseline

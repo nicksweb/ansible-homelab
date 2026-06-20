@@ -247,6 +247,16 @@ ansible -i inventory proxmox -m shell -a "pvecm status"
 
 ## Timezone & NTP Operations
 
+### Apply shared SSH key and Brisbane timezone baseline
+```bash
+# First run for one new host
+ansible-playbook playbooks/site-baseline.yml \
+  --limit "hostname" --ask-pass --ask-become-pass
+
+# All reachable inventory hosts
+ansible-playbook playbooks/site-baseline.yml
+```
+
 ### Check timezone on all machines
 ```bash
 ansible -i inventory all -m command -a "timedatectl show --property=Timezone --value"

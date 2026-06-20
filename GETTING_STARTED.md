@@ -48,6 +48,16 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
 ansible -i inventory all -m ping
 ```
 
+#### 6. Apply the common SSH key and timezone baseline
+```bash
+ansible-playbook playbooks/site-baseline.yml --limit "hostname" --ask-pass --ask-become-pass
+```
+
+#### 7. Configure a desktop workstation
+```bash
+ansible-playbook playbooks/desktop-workstation.yml --limit "desktop01" --ask-pass --ask-become-pass
+```
+
 ### Directory Structure
 
 ```
@@ -65,6 +75,8 @@ ansible-homelab/
 │   ├── lamp.yml                  # LAMP stack setup
 │   ├── jekyll.yml                # Jekyll setup
 │   ├── create-k3s-cluster.yml    # Generic Proxmox K3s VM creation
+│   ├── site-baseline.yml          # Shared SSH key and timezone baseline
+│   ├── desktop-workstation.yml    # Desktop packages and Flatpaks
 │   └── roles/            # Reusable roles
 ├── GETTING_STARTED.md    # This file!
 ├── ARCHITECTURE.md       # How it's organized

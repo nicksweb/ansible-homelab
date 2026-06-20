@@ -5,6 +5,7 @@ raspberrypi
 docker
 proxmox
 setup
+workstations
 
 [ubuntu]
 app01 ansible_host=192.0.2.10 ansible_user=localadmin
@@ -23,6 +24,9 @@ docker01 ansible_host=192.0.2.40 ansible_user=localadmin
 
 [setup]
 # Add newly provisioned hosts here while bootstrapping them.
+
+[workstations]
+desktop01 ansible_host=192.0.2.60 ansible_user=desktopuser
 
 [linux:vars]
 ansible_python_interpreter=/usr/bin/python3
