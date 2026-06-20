@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+key_file="${ANSIBLE_PUBLIC_KEY_FILE:-${HOME}/.ssh/ansible.pub}"
+bootstrap=false
+ansible_args=()
+
+for arg in "$@"; do
+    if [[ $arg == --bootstrap ]]; then
+        bootstrap=true
+    else
+        ansible_args+=("$arg")
+    fi
+done
+
+if [[ ! -f $key_file ]]; then
+    echo "Public key not found: $key_file" >&2
+    exit 1
+fi
+
+cd "$repo_dir"
+if [[ $bootstrap == true ]]; then
+    ansible_args+=(--ask-pass)
+fi
+# The inventory enables sudo globally, but installing a key for the connected
+# account only needs that account's own ~/.ssh directory. Extra vars have high
+# enough precedence to override inventory-level ansible_become=yes.
+ansible_args+=(--extra-vars ansible_become=false)
+ansible_args+=(--extra-vars "controller_public_key_file=${key_file}")
+exec ansible-playbook playbooks/deploy-controller-key.yml "${ansible_args[@]}"

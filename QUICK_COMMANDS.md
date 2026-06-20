@@ -70,7 +70,7 @@ ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "docke
 
 ### Update just one machine by IP
 ```bash
-ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "172.16.0.23"
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "192.0.2.23"
 ```
 
 ### Just update package cache (no upgrade)
@@ -80,7 +80,7 @@ ansible-playbook playbooks/linux_apt-update.yml -i inventory -kK
 
 ### Update specific machines (comma-separated)
 ```bash
-ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "172.16.0.23,172.16.0.27"
+ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "192.0.2.23,192.0.2.27"
 ```
 
 ## Common Administration Tasks
@@ -134,12 +134,12 @@ ansible -i inventory all -m ping
 
 ### Check connectivity to specific host
 ```bash
-ansible -i inventory 172.16.0.23 -m ping
+ansible -i inventory 192.0.2.23 -m ping
 ```
 
 ### Run speedtest on specific machine (if installed)
 ```bash
-ansible-playbook playbooks/speedtest.yml -i inventory --limit "172.16.0.60" -kK
+ansible-playbook playbooks/speedtest.yml -i inventory --limit "192.0.2.60" -kK
 ```
 
 ### Check DNS resolution
@@ -166,7 +166,7 @@ ansible -i inventory docker -m shell -a "docker --version"
 
 ### Stop container on specific host
 ```bash
-ansible -i inventory 172.16.1.243 -m shell -a "docker stop container_name"
+ansible -i inventory 198.51.100.243 -m shell -a "docker stop container_name"
 ```
 
 ### Setup new Docker host
@@ -178,12 +178,39 @@ ansible-playbook playbooks/docker.yml -i inventory -kK --limit "new_docker_host_
 
 ### Copy SSH key to all machines
 ```bash
-ansible -i inventory all -m authorized_key -a "user=localadmin key='{{ lookup(\"file\", \"~/.ssh/id_rsa.pub\") }}' state=present"
+# First-time rollout using the remote account's SSH password
+./deploy-ansible-key --bootstrap --limit "hostname"
+
+# Batch hosts only when they share the same SSH username and password
+./deploy-ansible-key --bootstrap --limit "host1:host2:host3"
 ```
 
 ### Check SSH connectivity
 ```bash
-ansible -i inventory all -m ping
+# Disable inventory-wide sudo for a read-only ping check
+ansible all -m ping -e ansible_become=false -o
+```
+
+### Install and run speedtest-cli
+```bash
+# Runs non-root-managed hosts concurrently; excludes Proxmox by default
+./run-speedtest
+
+# Run one host at a time for uncontended results
+./run-speedtest --sequential
+
+# Test one host or group
+./run-speedtest --limit app01
+./run-speedtest --limit docker
+```
+
+### Enable passwordless sudo
+```bash
+# Supply the existing sudo password once
+./enable-passwordless-sudo --limit "hostname" --ask-become-pass
+
+# Verify that become now works without prompting
+ansible hostname -b -m command -a "whoami"
 ```
 
 ### Update SSH config on all machines
@@ -325,7 +352,7 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host"
 ### Onboard with hostname and IP configuration
 ```bash
 ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host" \
-  -e "host_hostname=docker-01 host_ipaddr=172.16.1.100 host_netmask=24 host_gateway=172.16.0.1"
+  -e "host_hostname=docker-01 host_ipaddr=198.51.100.100 host_netmask=24 host_gateway=192.0.2.1"
 ```
 
 ### Onboard on test machine first (safe testing)
@@ -402,7 +429,7 @@ ansible -i inventory all -m shell -a "journalctl -xe | tail -20"
 
 ### Test SSH connection to specific host
 ```bash
-ansible -i inventory 172.16.0.23 -m ping -vvv
+ansible -i inventory 192.0.2.23 -m ping -vvv
 ```
 
 ### Check Python availability
@@ -412,7 +439,7 @@ ansible -i inventory all -m shell -a "python3 --version"
 
 ### See what variables are available
 ```bash
-ansible -i inventory 172.16.0.23 -m debug -a "var=hostvars[inventory_hostname]"
+ansible -i inventory 192.0.2.23 -m debug -a "var=hostvars[inventory_hostname]"
 ```
 
 ### Check if host is in inventory

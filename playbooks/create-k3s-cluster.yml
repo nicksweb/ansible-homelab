@@ -1,0 +1,32 @@
+---
+- name: Create and start Proxmox VMs from template
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create VMs from template
+      community.general.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_password: "{{ vault_proxmox_api_password }}"
+        node: "{{ proxmox_node }}"
+        state: present
+        vmid: "{{ item.newid }}"
+        name: "{{ item.name }}"
+        clone_from: "{{ item.vmid }}"
+        full: true
+        storage: "{{ item.storage | default(omit) }}"
+      loop: "{{ proxmox_vm_definitions }}"
+      delegate_to: localhost
+
+    - name: Start the VMs
+      community.general.proxmox:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_password: "{{ vault_proxmox_api_password }}"
+        node: "{{ proxmox_node }}"
+        state: started
+        vmid: "{{ item.newid }}"
+      loop: "{{ proxmox_vm_definitions }}"
+      delegate_to: localhost
+
+- import_playbook: bootstrap.yml

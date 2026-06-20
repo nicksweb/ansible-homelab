@@ -1,0 +1,19 @@
+# Local inventories and host-specific connection data
+inventory
+inventory.organized
+inventory.local
+nbc
+host_vars/
+group_vars/
+
+# Local SSH/reference notes
+SSH_REFERENCE.local.md
+
+# Secrets and transient Ansible files
+.env
+.env.*
+*.retry
+*.vault
+vault*.yml
+*.key
+*.pem

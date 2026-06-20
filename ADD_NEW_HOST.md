@@ -77,7 +77,7 @@ Identify what category your new host belongs to:
 
 ### Step 2.2: Edit Inventory File
 
-Edit `inventory` or `inventory.organized`:
+Copy `inventory.example` to the ignored local `inventory` file, then edit it:
 
 ```bash
 nano inventory
@@ -90,7 +90,7 @@ Add the host to the appropriate `[group]` section:
 ```ini
 # Example: Adding a Docker server
 [docker]
-172.16.1.100          # New Docker host
+198.51.100.100          # New Docker host
 
 # Example: Adding a Proxmox host
 [proxmox]
@@ -108,7 +108,7 @@ docker-01
 ```
 
 **Best Practices:**
-- Use hostnames where possible (easier to remember): `docker-01` instead of `172.16.1.100`
+- Use hostnames where possible (easier to remember): `docker-01` instead of `198.51.100.100`
 - If using IPs, pick a group that clearly indicates its role
 - A host can be in multiple groups (Ubuntu + Docker, etc.)
 
@@ -240,7 +240,7 @@ If you need to set hostname and IP:
 
 ```bash
 ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "docker-01" \
-  -e "host_hostname=docker-prod-01 host_ipaddr=172.16.1.100 host_netmask=24 host_gateway=172.16.0.1"
+  -e "host_hostname=docker-prod-01 host_ipaddr=198.51.100.100 host_netmask=24 host_gateway=192.0.2.1"
 ```
 
 ### Step 5.3: Test Before Production (Recommended)
@@ -323,7 +323,7 @@ Adding **docker-prod-01** (Docker server) to the homelab:
 
 ### Step 1: Prepare
 ```bash
-ssh ubuntu@192.168.1.100
+ssh ubuntu@203.0.113.100
 sudo adduser localadmin
 sudo usermod -aG sudo localadmin
 # Create password, then logout

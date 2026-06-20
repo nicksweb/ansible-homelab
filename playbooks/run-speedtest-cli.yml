@@ -1,0 +1,26 @@
+---
+- name: Install and run speedtest-cli on non-Proxmox hosts
+  hosts: all:!proxmox
+  gather_facts: false
+  serial: "{{ speedtest_batch_size | default('100%') }}"
+
+  tasks:
+    - name: Install speedtest-cli
+      become: true
+      ansible.builtin.package:
+        name: speedtest-cli
+        state: present
+
+    - name: Run internet speed test
+      become: false
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/speedtest-cli
+          - --secure
+          - --simple
+      register: speedtest_result
+      changed_when: false
+
+    - name: Display speed-test result
+      ansible.builtin.debug:
+        msg: "{{ speedtest_result.stdout_lines }}"

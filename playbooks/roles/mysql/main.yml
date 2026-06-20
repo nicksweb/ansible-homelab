@@ -1,4 +1,4 @@
-mysql_root_password: super-secure-password
+mysql_root_password: "{{ vault_mysql_root_password }}"
 mysql_databases:
   - name: example_db
     encoding: latin1
@@ -6,5 +6,5 @@ mysql_databases:
 mysql_users:
   - name: example_user
     host: "%"
-    password: similarly-secure-password
+    password: "{{ vault_example_user_password }}"
     priv: "example_db.*:ALL"

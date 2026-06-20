@@ -25,6 +25,7 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 ### For First-Time / Returning Users
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - ⭐ Start here! Quick reference and common tasks
+- **[REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md)** - Remote control node, WireGuard, inventory aliases, and SSH key rollout
 - **[ADD_NEW_HOST.md](ADD_NEW_HOST.md)** - ⭐ Complete workflow for adding new machines
 - **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (90+ commands)
 
@@ -34,7 +35,7 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 ### Configuration
 - **[inventory](inventory)** - All machines and groups (where to add new hosts)
-- **[inventory.organized](inventory.organized)** - Better organized inventory template
+- **[inventory.example](inventory.example)** - Safe inventory template to copy locally
 - **[SSH_REFERENCE.md](SSH_REFERENCE.md)** - SSH host configuration reference
 
 ---
@@ -105,7 +106,7 @@ ansible -i inventory all -m shell -a "df -h / | tail -1"
 ```
 ansible-homelab/
 ├── inventory              # Machine definitions (add/remove hosts here)
-├── inventory.organized    # Alternative inventory with better organization
+├── inventory.example      # Safe template; copy to ignored local inventory
 ├── ansible.cfg           # Ansible configuration
 ├── requirements.yml      # Galaxy role requirements
 ├── playbooks/            # All automation playbooks
@@ -170,7 +171,7 @@ my-proxmox-host ansible_user=root
 my-docker-server
 
 [ubuntu]
-192.168.1.100
+203.0.113.100
 ```
 
 ### 3. Run Common Tasks
@@ -229,7 +230,7 @@ ansible -i inventory all -m ping
 ansible -i inventory all -m command -a "uptime"
 
 # Run speedtest on specific machine
-ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
+ansible-playbook playbooks/speedtest.yml -i inventory -l "192.0.2.60" -kK
 ```
 
 ---
@@ -239,6 +240,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Quick reference for common tasks (START HERE!) |
+| [REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md) | Operating the remote WireGuard Ansible control node and deploying its SSH key |
 | [ADD_NEW_HOST.md](ADD_NEW_HOST.md) | Complete workflow for adding new machines to homelab |
 | [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) | Setting up a new Ansible control node |
 | [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 90+ copy-paste ready commands |
@@ -246,7 +248,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "172.16.0.60" -kK
 | [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) | Detailed documentation for all playbooks |
 | [SSH_REFERENCE.md](SSH_REFERENCE.md) | SSH configuration and key management |
 | [inventory](inventory) | Current machine definitions |
-| [inventory.organized](inventory.organized) | Better organized inventory template |
+| [inventory.example](inventory.example) | Safe template for creating a local inventory |
 
 ---
 

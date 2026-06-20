@@ -117,10 +117,10 @@ ansible-galaxy install -r requirements.yml
 
 ```bash
 # For machines with password auth (temporary)
-ssh-copy-id -i ~/.ssh/ansible.pub localadmin@172.16.0.23
+ssh-copy-id -i ~/.ssh/ansible.pub localadmin@192.0.2.23
 
 # For Proxmox hosts (root user)
-ssh-copy-id -i ~/.ssh/ansible.pub root@sapve01
+ssh-copy-id -i ~/.ssh/ansible.pub root@hypervisor01
 ```
 
 ### Method 2: Automated via Ansible (Recommended)
@@ -246,7 +246,7 @@ ansible -i inventory proxmox -m ping
 
 One host uses a user-specific key:
 ```ini
-172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
+workstation01 ansible_host=192.0.2.60 ansible_user=localadmin
 ```
 
 For new user-specific keys:

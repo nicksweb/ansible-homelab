@@ -41,9 +41,9 @@ echo "<Raspberry public key>" >> ~/.ssh/authorized_keys
 ```
 
 **Exceptions**: 
-- One workstation (172.16.0.60) uses a user-specific key:
+- One workstation (192.0.2.60) uses a user-specific key:
 ```ini
-172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
+workstation01 ansible_host=192.0.2.60 ansible_user=localadmin
 ```
 - This is for non-standard user on one specific machine
 
@@ -76,34 +76,32 @@ See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for comprehensive instruction
 ```
 [linux]                          # Parent group for all Linux
 ├── [ubuntu]                     # Ubuntu-based
-│   ├── 172.16.0.23             # IP-based hosts
+│   ├── 192.0.2.23             # IP-based hosts
 │   ├── unifi                    # Named hosts
-│   └── 172.16.1.249
+│   └── 198.51.100.249
 ├── [debian]                     # Debian machines
-│   └── 172.16.0.93
+│   └── 192.0.2.93
 ├── [raspberrypi]                # ARM/Pi devices
 │   ├── pidns26
 │   ├── pidns23
 │   ├── sapi4a02
-│   └── 172.16.0.24
+│   └── 192.0.2.24
 ├── [proxmox]                    # Hypervisors (root access)
-│   ├── sapve01 (ansible_user=root)
-│   ├── sapve02-05
-│   ├── sapve07-09
-│   ├── sapvethebeast
+│   ├── hypervisor01 (ansible_user=root)
+│   └── hypervisor02
 │   └── pve
 ├── [docker]                     # Docker-capable hosts
-│   ├── 172.16.1.243
-│   ├── 172.16.1.225
+│   ├── 198.51.100.243
+│   ├── 198.51.100.225
 │   └── (9 hosts total)
 ├── [lampstack]                  # LAMP servers
-│   └── cipi
+│   └── web01
 ├── [bitwarden]                  # Bitwarden servers
-│   └── 172.16.1.93
+│   └── 198.51.100.93
 ├── [surveillance]               # Frigate video surveillance
-│   └── 172.16.0.93
+│   └── 192.0.2.93
 ├── [master]                     # Ansible control node
-│   └── 172.16.0.60
+│   └── 192.0.2.60
 └── [setup]                      # New machines awaiting bootstrap
     └── (5+ hosts)
 ```
@@ -270,14 +268,14 @@ ansible_become_method=sudo
 
 ### Group-specific Variables
 ```ini
-[k3s-sapve01:vars]
-sapve01_host=https://172.16.0.70:8006
-sapve01_user=root@pam
+[k3s_cluster:vars]
+proxmox_api_host=https://192.0.2.70:8006
+proxmox_api_user=automation@pam
 ```
 
 ### Per-host Variables
 ```ini
-172.16.0.60 ansible_user=nicholaso private_key_file=~/.ssh/nicholaso.corsair3900x
+workstation01 ansible_host=192.0.2.60 ansible_user=localadmin
 ```
 
 ## Best Practices

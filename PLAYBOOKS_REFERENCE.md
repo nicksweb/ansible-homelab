@@ -63,7 +63,7 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host"
 
 # With hostname and IP configuration
 ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host" \
-  -e "host_hostname=docker-01 host_ipaddr=172.16.1.100 host_netmask=24 host_gateway=172.16.0.1"
+  -e "host_hostname=docker-01 host_ipaddr=198.51.100.100 host_netmask=24 host_gateway=192.0.2.1"
 
 # On test machine before production
 ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
@@ -92,9 +92,9 @@ ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "test"
 **Variables** (optional - pass with `-e`):
 ```yaml
 host_hostname: docker-01              # Set system hostname
-host_ipaddr: 172.16.1.100            # Static IP address
+host_ipaddr: 198.51.100.100            # Static IP address
 host_netmask: 24                       # Network mask (CIDR or dotted)
-host_gateway: 172.16.0.1              # Default gateway
+host_gateway: 192.0.2.1              # Default gateway
 host_dns_servers:                      # DNS servers
   - 8.8.8.8
   - 1.1.1.1
@@ -176,7 +176,7 @@ ansible-playbook playbooks/setup.yml -i inventory -kK
 ansible-playbook playbooks/docker.yml -i inventory -kK
 
 # Single host by IP
-ansible-playbook playbooks/docker.yml -i inventory -kK --limit "172.16.1.243"
+ansible-playbook playbooks/docker.yml -i inventory -kK --limit "198.51.100.243"
 ```
 **What it does**:
 - Installs Docker and docker-compose
@@ -206,7 +206,7 @@ ansible-playbook playbooks/copy_docker.yml -i inventory -k --limit "docker"
 
 ### lamp.yml
 **Purpose**: Install LAMP stack (Linux, Apache, MySQL/MariaDB, PHP)
-**Hosts**: `lampstack` group (e.g., `cipi`)
+**Hosts**: `lampstack` group (e.g., `web01`)
 **Usage**:
 ```bash
 ansible-playbook playbooks/lamp.yml -i inventory -kK --limit "lampstack"
@@ -238,7 +238,7 @@ ansible-playbook playbooks/jekyll.yml -i inventory -kK --limit "jekyll_hosts"
 
 ### ansible-role-bitwarden.yml
 **Purpose**: Install Bitwarden password manager
-**Hosts**: `bitwarden` group (172.16.1.93)
+**Hosts**: `bitwarden` group (198.51.100.93)
 **Usage**:
 ```bash
 ansible-playbook playbooks/ansible-role-bitwarden.yml -i inventory -kK
@@ -260,7 +260,7 @@ ansible-playbook playbooks/ntp.yml -i inventory -kK
 ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "ubuntu"
 
 # Configure single host
-ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "172.16.1.100"
+ansible-playbook playbooks/ntp.yml -i inventory -kK --limit "198.51.100.100"
 ```
 
 **What it does**:
@@ -305,7 +305,7 @@ ansible -i inventory all -m command -a "chronyc tracking"
 **Purpose**: Run speedtest-cli on target machines
 **Usage**:
 ```bash
-ansible-playbook playbooks/speedtest.yml -i inventory --limit "172.16.0.60" -kK
+ansible-playbook playbooks/speedtest.yml -i inventory --limit "192.0.2.60" -kK
 ```
 **What it does**: Executes speedtest if installed (requires speedtest-cli package)
 
@@ -315,7 +315,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory --limit "172.16.0.60" -kK
 
 ### ansible.yml
 **Purpose**: Install Ansible on control nodes
-**Hosts**: `master` group (172.16.0.60)
+**Hosts**: `master` group (192.0.2.60)
 **Usage**:
 ```bash
 ansible-playbook playbooks/ansible.yml -i inventory -kK
@@ -340,13 +340,13 @@ ansible-playbook playbooks/ansible.yml -i inventory -kK
 
 ```bash
 # Docker specific host
-ansible-playbook playbooks/docker.yml -l 192.168.1.35 -kK -i nbc
+ansible-playbook playbooks/docker.yml -l docker01 -kK -i inventory
 
 # Bootstrap setup hosts
-ansible-playbook playbooks/bootstrap.yml -l 172.16.1.223 -kK -i inventory
+ansible-playbook playbooks/bootstrap.yml -l 198.51.100.223 -kK -i inventory
 
 # Run speedtest on specific machine
-speedtest.yml -i ../inventory -k -l 172.16.0.60
+speedtest.yml -i ../inventory -k -l 192.0.2.60
 ```
 
 ---

@@ -8,13 +8,13 @@
 #
 #   With hostname and IP configuration:
 #   ansible-playbook playbooks/setup-onboard.yml -i inventory -kK --limit "new_host" \
-#     -e "host_hostname=myserver host_ipaddr=192.168.1.100 host_netmask=255.255.255.0 host_gateway=192.168.1.1"
+#     -e "host_hostname=myserver host_ipaddr=203.0.113.100 host_netmask=255.255.255.0 host_gateway=203.0.113.1"
 #
 # Variables (all optional):
 #   host_hostname: New hostname (e.g., docker-01, server-lamp)
-#   host_ipaddr: Static IP address (e.g., 172.16.1.100)
+#   host_ipaddr: Static IP address (e.g., 198.51.100.100)
 #   host_netmask: Network mask (e.g., 255.255.255.0 or /24)
-#   host_gateway: Default gateway (e.g., 172.16.0.1)
+#   host_gateway: Default gateway (e.g., 192.0.2.1)
 #   host_dns_servers: DNS servers as list (default: [8.8.8.8, 1.1.1.1])
 #   host_interface: Network interface to configure (default: auto-detect)
 #   generate_ssh_key: Generate SSH key on host (default: true)

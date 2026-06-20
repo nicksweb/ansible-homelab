@@ -19,7 +19,7 @@ apache_global_vhost_settings: |
 apache_vhosts:
   # Additional properties:
   # 'serveradmin, serveralias, allow_override, options, extra_parameters'.
-  - servername: "hostla.suburbanau.com"
+  - servername: "app.example.com"
     documentroot: "/var/www/html"
 
 apache_allow_override: "All"

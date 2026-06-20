@@ -4,11 +4,11 @@ mysql_table_open_cache: "256"
 
 mysql_user_home: /root
 mysql_user_name: root
-mysql_user_password: root
+mysql_user_password: "{{ vault_mysql_user_password }}"
 
-mysql_root_home: /home/localadmin
-mysql_root_username: localadmin
-mysql_root_password: localadmin
+mysql_root_home: /root
+mysql_root_username: root
+mysql_root_password: "{{ vault_mysql_root_password }}"
 
 mysql_root_password_update: false
 mysql_enabled_on_startup: true
@@ -24,5 +24,4 @@ mysql_expire_logs_days: "10"
 mysql_replication_role: ''
 mysql_replication_master: ''
 mysql_replication_user: {}
-
 

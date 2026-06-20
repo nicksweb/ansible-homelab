@@ -1,0 +1,32 @@
+[linux:children]
+ubuntu
+debian
+raspberrypi
+docker
+proxmox
+setup
+
+[ubuntu]
+app01 ansible_host=192.0.2.10 ansible_user=localadmin
+
+[debian]
+db01 ansible_host=192.0.2.20 ansible_user=localadmin
+
+[raspberrypi]
+dns01 ansible_host=192.0.2.30 ansible_user=pi
+
+[docker]
+docker01 ansible_host=192.0.2.40 ansible_user=localadmin
+
+[proxmox]
+# hypervisor01 ansible_host=192.0.2.50 ansible_user=root
+
+[setup]
+# Add newly provisioned hosts here while bootstrapping them.
+
+[linux:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_connection=ssh
+
+# Copy this file to "inventory" and replace documentation-only addresses.
+# Keep the real inventory local; it is intentionally ignored by Git.

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ansible_args=("$@")
+has_limit=false
+has_forks=false
+sequential=false
+filtered_args=()
+
+for arg in "$@"; do
+    if [[ $arg == --sequential ]]; then
+        sequential=true
+        continue
+    fi
+
+    filtered_args+=("$arg")
+    case "$arg" in
+        -l|--limit|--limit=*) has_limit=true ;;
+        -f|--forks|--forks=*) has_forks=true ;;
+    esac
+done
+
+ansible_args=("${filtered_args[@]}")
+
+# The playbook excludes the Proxmox group. Keep the same explicit default here
+# so --list-hosts and command output clearly show the selected scope.
+if [[ $has_limit == false ]]; then
+    ansible_args+=(--limit 'all:!proxmox')
+fi
+
+# Start all selected hosts concurrently by default.
+if [[ $has_forks == false ]]; then
+    ansible_args+=(--forks 50)
+fi
+
+if [[ $sequential == true ]]; then
+    ansible_args+=(--extra-vars speedtest_batch_size=1)
+fi
+
+cd "$repo_dir"
+exec ansible-playbook playbooks/run-speedtest-cli.yml "${ansible_args[@]}"

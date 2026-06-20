@@ -1,0 +1,19 @@
+---
+- name: Authorize this Ansible control node on managed hosts
+  hosts: all
+  gather_facts: false
+
+  vars:
+    controller_public_key_file: "{{ lookup('env', 'HOME') }}/.ssh/ansible.pub"
+    authorized_key_user: "{{ ansible_user | default('localadmin') }}"
+
+  tasks:
+    - name: Install the control node public key
+      # Installing a key for the connected account does not require sudo. This
+      # explicitly overrides the inventory-wide ansible_become=yes setting.
+      become: false
+      ansible.posix.authorized_key:
+        user: "{{ authorized_key_user }}"
+        key: "{{ lookup('file', controller_public_key_file) }}"
+        state: present
+        manage_dir: true
