@@ -1,5 +1,12 @@
-# from galaxy
-- src: geerlingguy.docker
-- src: geerlingguy.apache-php-fpm
-- src: geerlingguy.apache
-- src: geerlingguy.php
+---
+roles:
+  - name: geerlingguy.ansible
+  - name: geerlingguy.docker
+  - name: geerlingguy.ntp
+  - name: geerlingguy.apache-php-fpm
+  - name: geerlingguy.apache
+  - name: geerlingguy.php
+  - name: geerlingguy.mysql
+collections:
+  - name: ansible.posix
+  - name: community.general

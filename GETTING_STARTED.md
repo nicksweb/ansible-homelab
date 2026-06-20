@@ -7,6 +7,8 @@ Welcome back! This guide helps you quickly get up to speed.
 ### Prerequisites
 - Ensure you have the SSH key configured: `~/.ssh/ansible`
 - This single key manages all systems in your homelab
+- Create your private inventory once: `cp inventory.example inventory`
+- Keep the resulting `inventory` local; it is intentionally ignored by Git
 - Run `ansible-galaxy install -r requirements.yml` to install required roles
 - For detailed control node setup, see [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md)
 
@@ -51,19 +53,24 @@ ansible -i inventory all -m ping
 ```
 ansible-homelab/
 ├── inventory              # Machine definitions (EDIT THIS to add/remove hosts)
+├── inventory.example      # Public template for creating the local inventory
 ├── ansible.cfg           # Ansible configuration
+├── deploy-ansible-key    # Install this control node's public key
+├── enable-passwordless-sudo # Configure sudo automation
+├── run-speedtest         # Concurrent/sequential speed testing
 ├── playbooks/            # All playbooks for various tasks
 │   ├── linux_apt-upgrade.yml     # Update/upgrade all Linux
 │   ├── bootstrap.yml             # Bootstrap new machines
 │   ├── docker.yml                # Docker setup
 │   ├── lamp.yml                  # LAMP stack setup
 │   ├── jekyll.yml                # Jekyll setup
-│   ├── k3s-cluster-*.yml         # Kubernetes cluster setup
+│   ├── create-k3s-cluster.yml    # Generic Proxmox K3s VM creation
 │   └── roles/            # Reusable roles
 ├── GETTING_STARTED.md    # This file!
 ├── ARCHITECTURE.md       # How it's organized
 ├── PLAYBOOKS_REFERENCE.md # Details on all playbooks
-└── QUICK_COMMANDS.md     # Common one-liners
+├── QUICK_COMMANDS.md     # Common one-liners
+└── REMOTE_CONTROL_NODE_RUNBOOK.md # Remote-node operations
 ```
 
 ### Key Concepts

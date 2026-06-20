@@ -111,7 +111,7 @@ ntp_servers:                           # NTP servers list
 
 **When to use**: Initial setup of new machines you're adding to the homelab
 
-**See also**: [ADD_NEW_HOST.md](../ADD_NEW_HOST.md) for complete workflow
+**See also**: [ADD_NEW_HOST.md](ADD_NEW_HOST.md) for complete workflow
 
 ---
 
@@ -165,6 +165,26 @@ ansible-playbook playbooks/setup.yml -i inventory -kK
 
 ---
 
+### deploy-controller-key.yml
+**Purpose**: Install the control node's public SSH key for each configured `ansible_user`
+**Recommended wrapper**:
+```bash
+./deploy-ansible-key --bootstrap --limit "hostname"
+```
+Use `--bootstrap` for the first connection when SSH password authentication is required. The operation is idempotent and does not require sudo when updating the connected account's own key.
+
+---
+
+### enable-passwordless-sudo.yml
+**Purpose**: Install and validate a passwordless sudo policy for non-root managed accounts
+**Recommended wrapper**:
+```bash
+./enable-passwordless-sudo --limit "hostname" --ask-become-pass
+```
+The generated file is validated with `visudo` before installation. Hosts connected as root are skipped.
+
+---
+
 ## Application & Service Setup
 
 ### docker.yml
@@ -185,22 +205,6 @@ ansible-playbook playbooks/docker.yml -i inventory -kK --limit "198.51.100.243"
 - Potentially pulls/starts containers
 
 **When to use**: Setting up new Docker hosts
-
----
-
-### copy_docker.yml
-**Purpose**: Copy Docker-related files/configs to hosts
-**Usage**:
-```bash
-ansible-playbook playbooks/copy_docker.yml -i inventory -k --limit "docker"
-```
-**What it does**: Synchronizes Docker configs/files to target machines
-
----
-
-### docker.yml (appears to use geerlingguy role)
-**Purpose**: Docker installation/configuration using Galaxy role
-**Usage**: Same as docker.yml above
 
 ---
 
@@ -297,7 +301,20 @@ ansible -i inventory all -m command -a "chronyc tracking"
 
 ## Kubernetes & Container Orchestration
 
-*Note: Kubernetes/K3s not currently in use for this homelab.*
+### create-k3s-cluster.yml
+**Purpose**: Clone and start Proxmox virtual machines for a K3s cluster
+**Required variables**:
+- `proxmox_api_host`
+- `proxmox_api_user`
+- `vault_proxmox_api_password` (store with Ansible Vault)
+- `proxmox_node`
+- `proxmox_vm_definitions`
+
+```bash
+ansible-playbook playbooks/create-k3s-cluster.yml --ask-vault-pass
+```
+
+---
 
 ## Utilities & Monitoring
 
@@ -313,6 +330,18 @@ ansible-playbook playbooks/speedtest.yml -i inventory --limit "192.0.2.60" -kK
 
 ---
 
+### run-speedtest-cli.yml
+**Purpose**: Install `speedtest-cli` and run tests concurrently or sequentially
+**Recommended wrapper**:
+```bash
+./run-speedtest                    # Concurrent tests
+./run-speedtest --sequential       # One host at a time
+./run-speedtest --limit docker     # Limit to a group
+```
+The play excludes the `proxmox` group and defaults to up to 50 Ansible forks.
+
+---
+
 ### ansible.yml
 **Purpose**: Install Ansible on control nodes
 **Hosts**: `master` group (192.0.2.60)
@@ -323,14 +352,6 @@ ansible-playbook playbooks/ansible.yml -i inventory -kK
 **What it does**: Installs Ansible using geerlingguy.ansible Galaxy role
 
 **When to use**: Setting up backup Ansible control nodes
-
----
-
-## Utility Files
-
-### vars.yml
-**Purpose**: Variable definitions file (usually sourced by other playbooks)
-**Not typically run directly** - included by other playbooks via `vars_files`
 
 ---
 

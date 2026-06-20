@@ -27,15 +27,15 @@ This project includes comprehensive documentation to help you work efficiently, 
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - ⭐ Start here! Quick reference and common tasks
 - **[REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md)** - Remote control node, WireGuard, inventory aliases, and SSH key rollout
 - **[ADD_NEW_HOST.md](ADD_NEW_HOST.md)** - ⭐ Complete workflow for adding new machines
-- **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (90+ commands)
+- **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (80+ commands)
 
 ### For Understanding the Project
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - How the infrastructure is organized and designed
 - **[PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md)** - Complete documentation of all playbooks
 
 ### Configuration
-- **[inventory](inventory)** - All machines and groups (where to add new hosts)
 - **[inventory.example](inventory.example)** - Safe inventory template to copy locally
+- **Local `inventory`** - Ignored by Git; contains your real machines and groups
 - **[SSH_REFERENCE.md](SSH_REFERENCE.md)** - SSH host configuration reference
 
 ---
@@ -109,6 +109,9 @@ ansible-homelab/
 ├── inventory.example      # Safe template; copy to ignored local inventory
 ├── ansible.cfg           # Ansible configuration
 ├── requirements.yml      # Galaxy role requirements
+├── deploy-ansible-key    # Roll out the control node public key
+├── enable-passwordless-sudo # Configure validated sudoers policy
+├── run-speedtest         # Concurrent or sequential speed tests
 ├── playbooks/            # All automation playbooks
 │   ├── *-apt-*.yml      # System updates/upgrades
 │   ├── bootstrap.yml     # Bootstrap new machines
@@ -117,6 +120,7 @@ ansible-homelab/
 │   ├── jekyll.yml        # Jekyll setup
 │   └── roles/            # Reusable roles
 ├── GETTING_STARTED.md    # Quick reference (START HERE!)
+├── REMOTE_CONTROL_NODE_RUNBOOK.md # Remote-node operations and troubleshooting
 ├── SETUP_ANSIBLE_HOST.md # Setting up Ansible control node
 ├── ARCHITECTURE.md       # Design and organization
 ├── PLAYBOOKS_REFERENCE.md # All playbooks documented
@@ -243,11 +247,10 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "192.0.2.60" -kK
 | [REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md) | Operating the remote WireGuard Ansible control node and deploying its SSH key |
 | [ADD_NEW_HOST.md](ADD_NEW_HOST.md) | Complete workflow for adding new machines to homelab |
 | [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) | Setting up a new Ansible control node |
-| [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 90+ copy-paste ready commands |
+| [QUICK_COMMANDS.md](QUICK_COMMANDS.md) | 80+ copy-paste ready commands |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design, structure, and best practices |
 | [PLAYBOOKS_REFERENCE.md](PLAYBOOKS_REFERENCE.md) | Detailed documentation for all playbooks |
 | [SSH_REFERENCE.md](SSH_REFERENCE.md) | SSH configuration and key management |
-| [inventory](inventory) | Current machine definitions |
 | [inventory.example](inventory.example) | Safe template for creating a local inventory |
 
 ---
@@ -255,7 +258,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "192.0.2.60" -kK
 ## 🔐 Security Notes
 
 - SSH keys stored at `~/.ssh/ansible` (default) or per-host override
-- Proxmox hosts accessed as `root` user
+- Keep site-specific users and connection details in the ignored local inventory
 - Most machines use `localadmin` user with sudo
 - Password prompts supported with `-k` and `-K` flags
 - Consider moving sensitive data (k3s passwords) to Ansible vault
@@ -292,7 +295,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "192.0.2.60" -kK
 ### When Returning After 2-6 Months
 1. Read [GETTING_STARTED.md](GETTING_STARTED.md) for quick refresh
 2. Run `ansible -i inventory all -m ping` to check status
-3. Review [inventory](inventory) for any changes
+3. Review the ignored local `inventory` for any changes
 4. Run `ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK`
 
 ---
@@ -328,8 +331,12 @@ Adapted from TiZuTech's ansible-homelab project.
 
 This is a personal homelab, but feel free to fork and adapt for your own needs!
 
-**Last Updated**: June 2026  
-**Documentation Version**: 1.0  
-**Documentation Files**: 9  
-**Total Playbooks**: 16  
-**Documented Commands**: 90+ 
+**Last Updated**: June 2026
+
+**Documentation Version**: 1.1
+
+**Documentation Files**: 10
+
+**Total Top-Level Playbooks**: 18
+
+**Documented Commands**: 80+

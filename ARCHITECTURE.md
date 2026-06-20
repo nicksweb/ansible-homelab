@@ -159,7 +159,6 @@ Playbooks are organized by function:
 
 ### Utilities
 - **vars.yml** - Variable definitions (usually included by other playbooks)
-- **copy_docker.yml** - Copy Docker-related files
 
 ## Roles
 
@@ -178,7 +177,7 @@ Roles use `defaults/main.yml` for variables and `tasks/main.yml` for implementat
 
 ## Adding a New Machine
 
-See [ADD_NEW_HOST.md](../ADD_NEW_HOST.md) for the complete step-by-step workflow, which includes:
+See [ADD_NEW_HOST.md](ADD_NEW_HOST.md) for the complete step-by-step workflow, which includes:
 
 1. **Prepare**: Initial access and user setup
 2. **Inventory**: Add host to appropriate groups
