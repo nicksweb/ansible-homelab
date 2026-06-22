@@ -22,3 +22,11 @@ vault*.yml
 *.swp
 *.swo
 *~
+
+# Syncthing conflict and temporary files
+*.sync-conflict-*
+.syncthing.*.tmp
+
+# Legacy site-specific files retained locally only
+playbooks/create-k3s-cluster-sapve01*.yml
+playbooks/vars.yml

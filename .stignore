@@ -1,0 +1,15 @@
+// Keep Git metadata local to each clone. Never synchronize Git internals.
+(?d).git
+(?d).git/**
+(?d)**/.git
+(?d)**/.git/**
+
+// The nested repository must be cloned and updated with Git independently.
+(?d)internet-pi
+(?d)internet-pi/**
+
+// Do not propagate Syncthing conflict or temporary artifacts.
+(?d)*.sync-conflict-*
+(?d)**/*.sync-conflict-*
+(?d).syncthing.*.tmp
+(?d)**/.syncthing.*.tmp
