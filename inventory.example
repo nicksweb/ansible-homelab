@@ -31,6 +31,8 @@ desktop01 ansible_host=192.0.2.60 ansible_user=desktopuser
 [linux:vars]
 ansible_python_interpreter=/usr/bin/python3
 ansible_connection=ssh
+# Restrict SNMP to the monitoring host/network in your ignored local inventory.
+# onboarding_snmp_allowed_network=192.0.2.50/32
 
 # Copy this file to "inventory" and replace documentation-only addresses.
 # Keep the real inventory local; it is intentionally ignored by Git.

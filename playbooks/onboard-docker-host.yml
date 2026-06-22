@@ -1,0 +1,85 @@
+---
+- name: Onboard Debian and Ubuntu Docker hosts
+  hosts: docker
+  gather_facts: true
+  become: true
+
+  vars:
+    docker_admin_user: localadmin
+
+  vars_prompt:
+    - name: onboarding_snmp_community
+      prompt: SNMP read-only community
+      private: true
+
+  pre_tasks:
+    - name: Apply common host baseline
+      ansible.builtin.include_role:
+        name: common_baseline
+
+    - name: Apply Linux monitoring and update baseline
+      ansible.builtin.include_role:
+        name: linux_onboarding
+
+    - name: Ensure sudo is available for the administration user
+      ansible.builtin.apt:
+        name: sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+
+    - name: Create Docker administration user
+      ansible.builtin.user:
+        name: "{{ docker_admin_user }}"
+        shell: /bin/bash
+        create_home: true
+        groups: sudo
+        append: true
+        state: present
+      become: true
+
+    - name: Authorize control-node key for Docker administration user
+      ansible.posix.authorized_key:
+        user: "{{ docker_admin_user }}"
+        key: "{{ lookup('file', common_authorized_key_file) }}"
+        state: present
+        manage_dir: true
+      become: true
+
+    - name: Configure validated passwordless sudo for Docker administration user
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/90-ansible-{{ docker_admin_user }}"
+        content: "{{ docker_admin_user }} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+      become: true
+
+  tasks:
+    - name: Install Docker Engine and plugins
+      ansible.builtin.include_role:
+        name: geerlingguy.docker
+      vars:
+        docker_users:
+          - "{{ docker_admin_user }}"
+        docker_install_compose_plugin: true
+
+    - name: Create Docker working directory
+      ansible.builtin.file:
+        path: "/home/{{ docker_admin_user }}/docker"
+        state: directory
+        owner: "{{ docker_admin_user }}"
+        group: "{{ docker_admin_user }}"
+        mode: '0750'
+      become: true
+
+    - name: Verify Docker Engine
+      ansible.builtin.command: docker version
+      register: onboarding_docker_version
+      changed_when: false
+
+    - name: Display Docker version
+      ansible.builtin.debug:
+        var: onboarding_docker_version.stdout_lines

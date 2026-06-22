@@ -1,0 +1,9 @@
+# Managed by Ansible. SNMP v2c community strings are transmitted in plaintext.
+agentaddress udp:161
+rocommunity {{ onboarding_snmp_community }} {{ onboarding_snmp_allowed_network }}
+sysLocation {{ onboarding_snmp_location }}
+sysContact {{ onboarding_snmp_contact }}
+sysServices 72
+
+view systemonly included .1.3.6.1.2.1.1
+view systemonly included .1.3.6.1.2.1.25.1

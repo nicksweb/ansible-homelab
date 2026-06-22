@@ -1,0 +1,23 @@
+---
+onboarding_packages:
+  - bashtop
+  - bwm-ng
+  - chrony
+  - neofetch
+  - snmpd
+  - unattended-upgrades
+  - vnstat
+
+onboarding_ntp_pools:
+  - 0.au.pool.ntp.org
+  - 1.au.pool.ntp.org
+  - 2.au.pool.ntp.org
+  - 3.au.pool.ntp.org
+
+onboarding_snmp_allowed_network: 127.0.0.1/32
+onboarding_snmp_location: Unspecified
+onboarding_snmp_contact: admin@example.com
+
+onboarding_automatic_reboot: true
+onboarding_automatic_reboot_with_users: true
+onboarding_automatic_reboot_time: "03:30"

@@ -25,6 +25,7 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 ### For First-Time / Returning Users
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** - ⭐ Start here! Quick reference and common tasks
+- **[ANSIBLE_CHEATSHEET.md](ANSIBLE_CHEATSHEET.md)** - Learning reference for commands, playbooks, variables, Vault, and troubleshooting
 - **[REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md)** - Remote control node, WireGuard, inventory aliases, and SSH key rollout
 - **[ADD_NEW_HOST.md](ADD_NEW_HOST.md)** - ⭐ Complete workflow for adding new machines
 - **[QUICK_COMMANDS.md](QUICK_COMMANDS.md)** - Copy-paste one-liners for common operations (80+ commands)
@@ -111,12 +112,16 @@ ansible-homelab/
 ├── requirements.yml      # Galaxy role requirements
 ├── deploy-ansible-key    # Roll out the control node public key
 ├── enable-passwordless-sudo # Configure validated sudoers policy
+├── onboard-linux        # Baseline Debian/Ubuntu onboarding
+├── onboard-docker-host # Baseline plus Docker Engine and localadmin
 ├── run-speedtest         # Concurrent or sequential speed tests
 ├── update-proxmox       # Sequential Proxmox package maintenance
 ├── playbooks/            # All automation playbooks
 │   ├── *-apt-*.yml      # System updates/upgrades
 │   ├── bootstrap.yml     # Bootstrap new machines
 │   ├── site-baseline.yml # Shared SSH key and timezone
+│   ├── onboard-linux.yml # Monitoring, updates, NTP, and SNMP
+│   ├── onboard-docker-host.yml # Linux baseline plus Docker
 │   ├── desktop-workstation.yml # Desktop packages and Flatpaks
 │   ├── proxmox-update.yml # Safe sequential Proxmox updates
 │   ├── docker.yml        # Docker setup
@@ -124,6 +129,7 @@ ansible-homelab/
 │   ├── jekyll.yml        # Jekyll setup
 │   └── roles/            # Reusable roles
 ├── GETTING_STARTED.md    # Quick reference (START HERE!)
+├── ANSIBLE_CHEATSHEET.md # Learning-oriented Ansible reference
 ├── REMOTE_CONTROL_NODE_RUNBOOK.md # Remote-node operations and troubleshooting
 ├── SETUP_ANSIBLE_HOST.md # Setting up Ansible control node
 ├── ARCHITECTURE.md       # Design and organization
@@ -192,6 +198,44 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
 ```
 
 **For detailed getting started guide, see [GETTING_STARTED.md](GETTING_STARTED.md)**
+
+---
+
+## Onboarding Debian and Ubuntu hosts
+
+After manually installing the control node's public SSH key, add the friendly
+host to your ignored local inventory. Restrict SNMP to the monitoring server or
+network in that inventory:
+
+```ini
+[linux:vars]
+onboarding_snmp_allowed_network=192.0.2.50/32
+```
+
+Onboard a standard Debian/Ubuntu host:
+
+```bash
+./onboard-linux --limit server01 --ask-become-pass
+```
+
+The command privately prompts for the SNMP community; enter your private
+monitoring value at runtime. It installs `vnstat`, `bwm-ng`, `bashtop`,
+`neofetch`, Chrony, SNMP, and unattended upgrades. Required reboots are
+scheduled for 03:30, and Chrony uses the Australian NTP pools.
+
+For a new Docker host, first add it to the `docker` inventory group, then run:
+
+```bash
+./onboard-docker-host --limit docker01 --ask-become-pass
+```
+
+This applies the same Linux baseline, creates `localadmin` when needed,
+authorizes the control-node public key, configures validated passwordless sudo,
+installs Docker Engine and Compose, adds `localadmin` to Docker access, and
+creates `/home/localadmin/docker`.
+
+The standard onboarding playbook excludes Proxmox hosts. Use the dedicated
+Proxmox maintenance workflow for hypervisors.
 
 ---
 
@@ -274,6 +318,7 @@ ansible-playbook playbooks/speedtest.yml -i inventory -l "192.0.2.60" -kK
 | Document | Purpose |
 |----------|---------|
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Quick reference for common tasks (START HERE!) |
+| [ANSIBLE_CHEATSHEET.md](ANSIBLE_CHEATSHEET.md) | Learning reference and operational cheat sheet |
 | [REMOTE_CONTROL_NODE_RUNBOOK.md](REMOTE_CONTROL_NODE_RUNBOOK.md) | Operating the remote WireGuard Ansible control node and deploying its SSH key |
 | [ADD_NEW_HOST.md](ADD_NEW_HOST.md) | Complete workflow for adding new machines to homelab |
 | [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) | Setting up a new Ansible control node |
@@ -363,10 +408,10 @@ This is a personal homelab, but feel free to fork and adapt for your own needs!
 
 **Last Updated**: June 2026
 
-**Documentation Version**: 1.1
+**Documentation Version**: 1.2
 
-**Documentation Files**: 10
+**Documentation Files**: 11
 
-**Total Top-Level Playbooks**: 21
+**Total Top-Level Playbooks**: 23
 
 **Documented Commands**: 80+

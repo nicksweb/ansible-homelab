@@ -1,0 +1,103 @@
+---
+- name: Require a Debian-family operating system
+  ansible.builtin.assert:
+    that: ansible_os_family == 'Debian'
+    fail_msg: This role supports Debian and Ubuntu hosts only.
+
+- name: Require an SNMP community supplied at runtime or through Vault
+  ansible.builtin.assert:
+    that:
+      - onboarding_snmp_community is defined
+      - onboarding_snmp_community | length > 0
+    fail_msg: Supply onboarding_snmp_community securely; do not commit it to Git.
+  no_log: true
+
+- name: Install monitoring, time, SNMP, and update packages
+  ansible.builtin.apt:
+    name: "{{ onboarding_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+- name: Configure Australian Chrony pools
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: Restart chrony
+
+- name: Configure restricted SNMP v2c monitoring
+  ansible.builtin.template:
+    src: snmpd.conf.j2
+    dest: /etc/snmp/snmpd.conf
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+  no_log: true
+  notify: Restart snmpd
+
+- name: Enable daily unattended upgrades
+  ansible.builtin.template:
+    src: 20auto-upgrades.j2
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Configure unattended upgrade origins and reboot window
+  ansible.builtin.template:
+    src: 52unattended-upgrades-local.j2
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Enable monitoring and time services
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  become: true
+  loop:
+    - chrony
+    - snmpd
+    - vnstat
+
+- name: Enable APT update timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  become: true
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+
+- name: Apply changed service configurations before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify configured timezone
+  ansible.builtin.command: timedatectl show --property=Timezone --value
+  register: onboarding_timezone_result
+  changed_when: false
+
+- name: Verify Chrony sources
+  ansible.builtin.command: chronyc sources
+  register: onboarding_chrony_result
+  changed_when: false
+  failed_when: false
+
+- name: Display onboarding summary
+  ansible.builtin.debug:
+    msg:
+      - "Timezone: {{ onboarding_timezone_result.stdout }}"
+      - "Automatic reboot: {{ onboarding_automatic_reboot }} at {{ onboarding_automatic_reboot_time }}"
+      - "SNMP source restriction: {{ onboarding_snmp_allowed_network }}"
+      - "Chrony source check return code: {{ onboarding_chrony_result.rc }}"

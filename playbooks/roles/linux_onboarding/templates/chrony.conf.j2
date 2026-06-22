@@ -1,0 +1,9 @@
+# Managed by Ansible. Local edits will be replaced.
+{% for pool in onboarding_ntp_pools %}
+pool {{ pool }} iburst
+{% endfor %}
+
+driftfile /var/lib/chrony/chrony.drift
+makestep 1.0 3
+rtcsync
+logdir /var/log/chrony

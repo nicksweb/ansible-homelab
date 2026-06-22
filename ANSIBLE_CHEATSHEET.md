@@ -298,6 +298,12 @@ Git history.
 ## Repository workflows
 
 ```bash
+# Onboard a standard Debian/Ubuntu host
+./onboard-linux --limit server01 --ask-become-pass
+
+# Onboard a Docker host with the same baseline
+./onboard-docker-host --limit docker01 --ask-become-pass
+
 # Shared public key and Australia/Brisbane timezone
 ansible-playbook playbooks/site-baseline.yml
 

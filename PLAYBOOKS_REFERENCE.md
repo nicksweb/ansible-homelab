@@ -67,6 +67,34 @@ ansible-playbook playbooks/shutdown.yml -i inventory -k --limit "hosts_to_shutdo
 
 ## Machine Bootstrap & Setup
 
+### onboard-linux.yml
+**Purpose**: Onboard standard Debian/Ubuntu hosts with monitoring and lifecycle automation
+**Recommended wrapper**:
+```bash
+./onboard-linux --limit server01 --ask-become-pass
+```
+Installs `vnstat`, `bwm-ng`, `bashtop`, `neofetch`, Chrony, `snmpd`, and
+unattended upgrades. It sets `Australia/Brisbane`, uses AU pool NTP servers,
+checks daily for updates, and schedules required automatic reboots for 03:30.
+The SNMP community is prompted privately; restrict
+`onboarding_snmp_allowed_network` in the ignored local inventory. Proxmox hosts
+are excluded.
+
+---
+
+### onboard-docker-host.yml
+**Purpose**: Apply the Linux baseline and configure a reusable Docker host
+**Recommended wrapper**:
+```bash
+./onboard-docker-host --limit docker01 --ask-become-pass
+```
+Creates `localadmin`, installs its authorized control-node key and validated
+passwordless sudo policy, installs Docker Engine and Compose through
+`geerlingguy.docker`, grants Docker access, and creates
+`/home/localadmin/docker`.
+
+---
+
 ### setup-onboard.yml
 **Purpose**: Comprehensive onboarding of new machines with SSH hardening, networking, timezone, NTP, and monitoring
 **Hosts**: `setup` group (or any new machine)

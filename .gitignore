@@ -17,3 +17,8 @@ SSH_REFERENCE.local.md
 vault*.yml
 *.key
 *.pem
+
+# Editor swap and backup files
+*.swp
+*.swo
+*~

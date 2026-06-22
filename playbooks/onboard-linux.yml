@@ -1,0 +1,13 @@
+---
+- name: Onboard Debian and Ubuntu systems
+  hosts: linux:!proxmox
+  gather_facts: true
+
+  vars_prompt:
+    - name: onboarding_snmp_community
+      prompt: SNMP read-only community
+      private: true
+
+  roles:
+    - role: common_baseline
+    - role: linux_onboarding

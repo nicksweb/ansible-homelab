@@ -176,6 +176,18 @@ ansible-playbook playbooks/docker.yml -i inventory -kK --limit "new_docker_host_
 
 ## SSH & Security
 
+### Onboard a Debian or Ubuntu host
+```bash
+# Public SSH key must already permit access; enter the SNMP community when prompted
+./onboard-linux --limit server01 --ask-become-pass
+```
+
+### Onboard a Docker host
+```bash
+# Host must be in the docker inventory group
+./onboard-docker-host --limit docker01 --ask-become-pass
+```
+
 ### Copy SSH key to all machines
 ```bash
 # First-time rollout using the remote account's SSH password
