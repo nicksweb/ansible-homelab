@@ -4,6 +4,20 @@ Complete documentation of all available playbooks in this homelab.
 
 ## System Maintenance
 
+### proxmox-update.yml
+**Purpose**: Update Proxmox VE nodes one at a time with opt-in reboot handling
+**Recommended wrapper**:
+```bash
+./update-proxmox --check --diff
+./update-proxmox
+./update-proxmox --reboot
+```
+The playbook verifies `pveversion`, performs an APT `dist-upgrade`, avoids
+automatic package removal by default, reports reboot requirements, and only
+reboots when `proxmox_reboot=true` is explicitly requested.
+
+---
+
 ### linux_apt-upgrade.yml
 **Purpose**: Update and upgrade all Linux machines, with automatic reboot handling
 **Usage**:

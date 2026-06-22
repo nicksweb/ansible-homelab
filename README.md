@@ -112,11 +112,13 @@ ansible-homelab/
 ├── deploy-ansible-key    # Roll out the control node public key
 ├── enable-passwordless-sudo # Configure validated sudoers policy
 ├── run-speedtest         # Concurrent or sequential speed tests
+├── update-proxmox       # Sequential Proxmox package maintenance
 ├── playbooks/            # All automation playbooks
 │   ├── *-apt-*.yml      # System updates/upgrades
 │   ├── bootstrap.yml     # Bootstrap new machines
 │   ├── site-baseline.yml # Shared SSH key and timezone
 │   ├── desktop-workstation.yml # Desktop packages and Flatpaks
+│   ├── proxmox-update.yml # Safe sequential Proxmox updates
 │   ├── docker.yml        # Docker setup
 │   ├── lamp.yml          # LAMP stack
 │   ├── jekyll.yml        # Jekyll setup
@@ -206,6 +208,32 @@ ansible-playbook playbooks/linux_apt-upgrade.yml -i inventory -kK --limit "docke
 # Just update package lists (no upgrade)
 ansible-playbook playbooks/linux_apt-update.yml -i inventory -kK
 ```
+
+### Updating Proxmox VE nodes
+
+Use the dedicated wrapper instead of the generic Linux upgrade playbook. It
+updates one Proxmox node at a time and does not reboot unless requested:
+
+```bash
+# Confirm inventory connectivity first
+ansible proxmox -m ping -e ansible_become=false -o
+
+# Preview changes without applying them
+./update-proxmox --check --diff
+
+# Update every reachable Proxmox node sequentially; do not reboot
+./update-proxmox
+
+# Update and reboot each node when /var/run/reboot-required exists
+./update-proxmox --reboot
+
+# Limit the operation to one node
+./update-proxmox --limit hypervisor01
+```
+
+Before clustered-node maintenance, confirm quorum and migrate or shut down
+important guests as appropriate. Automatic package removal is disabled by
+default to avoid removing Proxmox kernel or metapackage dependencies.
 
 ### Bootstrap New Machine
 ```bash
@@ -339,6 +367,6 @@ This is a personal homelab, but feel free to fork and adapt for your own needs!
 
 **Documentation Files**: 10
 
-**Total Top-Level Playbooks**: 20
+**Total Top-Level Playbooks**: 21
 
 **Documented Commands**: 80+

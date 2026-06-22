@@ -220,6 +220,18 @@ ansible -i inventory all -m copy -a "src=files/sshd.conf dest=/etc/ssh/sshd_conf
 
 ## Proxmox Operations
 
+### Update all Proxmox nodes sequentially
+```bash
+# Dry run
+./update-proxmox --check --diff
+
+# Apply updates without rebooting
+./update-proxmox
+
+# Apply updates and reboot only when required
+./update-proxmox --reboot
+```
+
 ### Check all Proxmox hosts
 ```bash
 ansible -i inventory proxmox -m ping

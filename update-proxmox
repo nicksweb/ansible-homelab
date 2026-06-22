@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ansible_args=()
+reboot=false
+
+for arg in "$@"; do
+    if [[ $arg == --reboot ]]; then
+        reboot=true
+    else
+        ansible_args+=("$arg")
+    fi
+done
+
+if [[ $reboot == true ]]; then
+    ansible_args+=(--extra-vars proxmox_reboot=true)
+fi
+
+cd "$repo_dir"
+exec ansible-playbook playbooks/proxmox-update.yml "${ansible_args[@]}"

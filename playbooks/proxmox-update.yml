@@ -1,0 +1,75 @@
+---
+- name: Update Proxmox VE nodes safely
+  hosts: proxmox
+  gather_facts: true
+  become: true
+  serial: "{{ proxmox_batch_size | default(1) }}"
+
+  vars:
+    proxmox_reboot: false
+    proxmox_autoremove: false
+
+  pre_tasks:
+    - name: Verify target is running Proxmox VE
+      ansible.builtin.command: pveversion
+      register: proxmox_version_before
+      changed_when: false
+      check_mode: false
+
+    - name: Display node and current Proxmox version
+      ansible.builtin.debug:
+        msg: "Updating {{ inventory_hostname }}: {{ proxmox_version_before.stdout }}"
+
+  tasks:
+    - name: Refresh APT package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        force_apt_get: true
+
+    - name: Apply available distribution upgrades
+      ansible.builtin.apt:
+        upgrade: dist
+        force_apt_get: true
+        dpkg_options: force-confdef,force-confold
+
+    - name: Optionally remove unused packages
+      ansible.builtin.apt:
+        autoremove: true
+        autoclean: true
+      when: proxmox_autoremove | bool
+
+    - name: Check whether a reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: proxmox_reboot_required
+
+    - name: Report reboot requirement
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ 'requires' if proxmox_reboot_required.stat.exists
+          else 'does not require' }} a reboot. Reboots are
+          {{ 'enabled' if proxmox_reboot | bool else 'disabled' }} for this run.
+
+    - name: Reboot node when explicitly requested and required
+      ansible.builtin.reboot:
+        msg: Reboot initiated by Ansible after Proxmox updates
+        connect_timeout: 10
+        reboot_timeout: 900
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        test_command: pveversion
+      when:
+        - proxmox_reboot | bool
+        - proxmox_reboot_required.stat.exists
+
+  post_tasks:
+    - name: Read resulting Proxmox version
+      ansible.builtin.command: pveversion
+      register: proxmox_version_after
+      changed_when: false
+      check_mode: false
+
+    - name: Display resulting Proxmox version
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ proxmox_version_after.stdout }}"
