@@ -1,0 +1,57 @@
+#cloud-config
+# Rendered by bin/provision-server.sh via envsubst. No secrets belong in here —
+# only the provisioning SSH *public* key and non-secret identity fields.
+
+hostname: ${SHORT_NAME}
+fqdn: ${FQDN}
+manage_etc_hosts: true
+timezone: ${TIMEZONE}
+prefer_fqdn_over_hostname: true
+
+users:
+  - name: ${ADMIN_USER}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - ${SSH_PUBLIC_KEY}
+    lock_passwd: true
+
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - wget
+  - git
+  - rsync
+  - unzip
+  - zip
+  - jq
+  - vim
+  - htop
+  - tmux
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - software-properties-common
+  - unattended-upgrades
+  - ufw
+  - fail2ban
+
+write_files:
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+runcmd:
+  - timedatectl set-timezone ${TIMEZONE}
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl enable --now fail2ban
+  - systemctl enable --now unattended-upgrades
+  - [ bash, -c, "echo cloud-init-bootstrap-complete > /var/log/provisioning-bootstrap-done" ]
+
+final_message: "cloud-init bootstrap finished for ${FQDN} after $UPTIME seconds"

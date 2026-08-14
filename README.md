@@ -36,6 +36,7 @@ This project includes comprehensive documentation to help you work efficiently, 
 
 ### Configuration
 - **[inventory.example](inventory.example)** - Safe inventory template to copy locally
+- **[provisioning/README.md](provisioning/README.md)** - Bash toolkits that create the machine itself (Proxmox LXC / BinaryLane VM) before Ansible onboarding takes over
 - **Local `inventory`** - Ignored by Git; contains your real machines and groups
 - **[SSH_REFERENCE.md](SSH_REFERENCE.md)** - SSH host configuration reference
 
@@ -116,6 +117,9 @@ ansible-homelab/
 ├── onboard-docker-host # Baseline plus Docker Engine and localadmin
 ├── run-speedtest         # Concurrent or sequential speed tests
 ├── update-proxmox       # Sequential Proxmox package maintenance
+├── provisioning/         # Bash toolkits that create the machine itself (Proxmox LXC / BinaryLane VM)
+│   ├── proxmox/          # Preferred: Proxmox LXC + split-horizon DNS + Cloudflare Tunnel
+│   └── binarylane/       # Cloud VM alternative, same DNS/tunnel pattern
 ├── playbooks/            # All automation playbooks
 │   ├── *-apt-*.yml      # System updates/upgrades
 │   ├── bootstrap.yml     # Bootstrap new machines
@@ -200,6 +204,22 @@ ansible-playbook playbooks/bootstrap.yml -i inventory -kK --limit "setup"
 **For detailed getting started guide, see [GETTING_STARTED.md](GETTING_STARTED.md)**
 
 ---
+
+## Provisioning new infrastructure
+
+Before a machine can be onboarded with Ansible, it has to exist. The
+[`provisioning/`](provisioning/README.md) toolkits handle that step —
+creating a Proxmox LXC container or a BinaryLane cloud VM, with split-horizon
+DNS and an optional Cloudflare Tunnel for external access:
+
+```bash
+cd provisioning/proxmox      # or provisioning/binarylane for a cloud VM
+cp config.example.env config.env
+./bin/provision-container.sh --hostname host001   # or provision-server.sh --name ...
+```
+
+Once a machine is up, add it to the `[setup]` group in your local inventory
+and continue with the normal onboarding flow below.
 
 ## Onboarding Debian and Ubuntu hosts
 

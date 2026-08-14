@@ -1,0 +1,8 @@
+config.env
+.cloudflare
+state/
+*.log
+*.pem
+*.key
+id_*
+!*.pub
