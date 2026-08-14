@@ -132,6 +132,25 @@ See [SETUP_ANSIBLE_HOST.md](SETUP_ANSIBLE_HOST.md) for comprehensive instruction
 - Default: `~/.ssh/ansible` key
 - Per-host override: `ansible_user=name private_key_file=~/.ssh/specific_key`
 
+## Provisioning vs. Onboarding
+
+Two distinct layers, deliberately not merged:
+
+- **Provisioning** (`provisioning/proxmox/`, `provisioning/binarylane/`) —
+  standalone bash toolkits that create the machine itself: the Proxmox LXC
+  container or BinaryLane VM, its internal DNS identity, and (optionally) a
+  dedicated Cloudflare Tunnel for external access. State-tracked and
+  idempotent, but intentionally outside Ansible — creating/destroying
+  compute and DNS records isn't a good fit for Ansible's declarative model
+  the way package/config management is.
+- **Onboarding** (`playbooks/bootstrap.yml`, `onboard-linux`,
+  `onboard-docker-host`, `setup-onboard.yml`) — the normal Ansible layer,
+  applied once a machine already exists (whether created by the
+  provisioning toolkits, BinaryLane's own tooling, or by hand).
+
+See [provisioning/README.md](provisioning/README.md) for the provisioning
+toolkits themselves.
+
 ## Playbooks
 
 Playbooks are organized by function:

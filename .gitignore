@@ -30,3 +30,10 @@ vault*.yml
 # Legacy site-specific files retained locally only
 playbooks/create-k3s-cluster-sapve01*.yml
 playbooks/vars.yml
+
+# Proxmox/BinaryLane provisioning toolkit — non-secret local state and
+# human-readable provisioning records, not meant for version control
+.api-auth.env
+.binarylane
+provisioned-servers/
+provisioned-servers-*.txt
