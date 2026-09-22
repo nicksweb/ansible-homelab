@@ -21,6 +21,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 SERVER_NAME="${1:?usage: add-site.sh <server-name> <subdomain> <domain> [php-version|php|none] [--proxy on|off]}"
@@ -62,14 +64,32 @@ echo "Routing:       $( [ "$TUNNEL_ENABLED" = "true" ] && echo "via this server'
 echo "Cloudflare Zone: $DOMAIN ($ZONE_ID)"
 echo "============================================================"
 
-log "Configuring webroot + Apache vhost on $SERVER_NAME..."
-SSH_OPTS=(-i "$PROVISIONING_SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes "${SSH_MULTIPLEX_OPTS[@]}")
-scp "${SSH_OPTS[@]}" "$HERE/scripts/add-site-remote.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/add-site-remote.sh"
-REMOTE_OUT="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" \
-  "chmod +x /tmp/add-site-remote.sh && /tmp/add-site-remote.sh '$FQDN' '$PHP_CHOICE' '$TUNNEL_ENABLED' && rm -f /tmp/add-site-remote.sh")" \
+log "Configuring webroot + Apache vhost on $SERVER_NAME (via Ansible)..."
+VHOST_VARS="$(jq -n --arg host "$FQDN" --arg php "$PHP_CHOICE" \
+  '{site_vhost_hostname:$host, site_vhost_style:"vhosts_d", site_vhost_php:$php,
+    site_vhost_welcome_subtitle:"Provisioned via the server-provisioning toolkit on the control host."}')"
+ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$VHOST_VARS" \
   || die "Remote site setup failed"
-echo "$REMOTE_OUT"
-PHP_VERSION_USED="$(echo "$REMOTE_OUT" | grep '^PHP_VERSION_USED=' | cut -d= -f2)"
+unset VHOST_VARS
+PHP_VERSION_USED="$PHP_ARG"
+
+if [ "$TUNNEL_ENABLED" = "true" ]; then
+  [ -n "$TUNNEL_ID" ] || die "Server state says tunnel_enabled but no tunnel_id recorded — inspect state/${SERVER_NAME}.json"
+  log "Updating tunnel ingress on $SERVER_NAME to include $FQDN (via Ansible)..."
+  PRIMARY_TUNNEL_HOSTNAME="$(state_read_field "$SERVER_NAME" '.cloudflare.tunnel_hostname // empty')"
+  ALL_HOSTNAMES=()
+  [ -n "$PRIMARY_TUNNEL_HOSTNAME" ] && ALL_HOSTNAMES+=("$PRIMARY_TUNNEL_HOSTNAME")
+  while IFS= read -r h; do [ -n "$h" ] && ALL_HOSTNAMES+=("$h"); done \
+    < <(state_read_field "$SERVER_NAME" '.cloudflare.additional_hostnames[]?.hostname // empty')
+  ALL_HOSTNAMES+=("$FQDN")
+
+  HOSTNAMES_JSON="$(printf '%s\n' "${ALL_HOSTNAMES[@]}" | sort -u | jq -R . | jq -s .)"
+  TUNNEL_INGRESS_VARS="$(jq -n --arg tid "$TUNNEL_ID" --argjson hostnames "$HOSTNAMES_JSON" \
+    '{tunnel_ingress_tunnel_id:$tid, tunnel_ingress_hostnames:$hostnames}')"
+  ansible_run_playbook "playbooks/provisioning/tunnel_ingress.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TUNNEL_INGRESS_VARS" \
+    || die "Failed to update tunnel ingress on the server"
+  unset TUNNEL_INGRESS_VARS
+fi
 
 # --- DNS ---
 if [ "$TUNNEL_ENABLED" = "true" ]; then
@@ -92,6 +112,25 @@ else
   RECORD_ID="$(echo "$RESULT" | jq -r '.result.id')"
 fi
 log "DNS record id: $RECORD_ID"
+
+# ---------------------------------------------------------------------------
+# State — track this hostname so future add-site.sh / tunnel_ingress runs
+# know the full set of hostnames already routed through this server's tunnel
+# (mirrors the Proxmox toolkit's cloudflare.additional_hostnames schema).
+# ---------------------------------------------------------------------------
+NOW="$(date -Iseconds)"
+CURRENT_STATE="$(cat "$(state_file "$SERVER_NAME")")"
+if [ "$(state_read_field "$SERVER_NAME" '.cloudflare.tunnel_hostname // empty')" = "$FQDN" ]; then
+  NEW_STATE="$(echo "$CURRENT_STATE" | jq --arg updated "$NOW" '.updated_at = $updated')"
+else
+  NEW_STATE="$(echo "$CURRENT_STATE" | jq \
+    --arg h "$FQDN" --arg rid "$RECORD_ID" --arg php "$PHP_VERSION_USED" --arg updated "$NOW" \
+    '.updated_at = $updated
+     | .cloudflare.additional_hostnames = ((.cloudflare.additional_hostnames // [])
+         | map(select(.hostname != $h))
+         + [{hostname:$h, dns_record_id:$rid, php:$php}])')"
+fi
+state_write "$SERVER_NAME" "$NEW_STATE"
 
 # --- Verify ---
 log "Verifying HTTP..."

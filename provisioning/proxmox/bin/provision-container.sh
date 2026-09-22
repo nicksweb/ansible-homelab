@@ -22,6 +22,11 @@
 #                          publicly resolvable, since DNS-01 only needs to create a TXT record.
 #   --skip-web            Don't install the minimal Apache test vhost (default: installed)
 #   --skip-beszel          Don't install the Beszel monitoring agent (default: installed)
+#   --enable-tailscale      Join the tailnet, tagged $TAILSCALE_TAG, Tailscale SSH on (default: not joined —
+#                          Proxmox containers already live on the internal LAN; Tailscale is mainly for
+#                          BinaryLane's public cloud VMs). Unprivileged LXC has no /dev/net/tun, so this
+#                          falls back to Tailscale's userspace-networking mode automatically unless you've
+#                          already added device passthrough yourself (see lib/common.sh TAILSCALE_TAG comment).
 #   --dry-run            Print the plan and exit, no resources created
 #   --yes                Skip the interactive confirmation prompt
 set -uo pipefail
@@ -33,10 +38,15 @@ source "$HERE/lib/common.sh"
 source "$PROVISIONING_ROOT/common/cloudflare.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/udm.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/tailscale.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 HOSTNAME_ARG="" CORES="$DEFAULT_CORES" MEMORY="$DEFAULT_MEMORY_MB" DISK="$DEFAULT_DISK_GB"
 NODE_ARG="" VLAN_TAG="$PVE_VLAN_TAG" PUBLIC_HOSTNAME_RAW="" ENABLE_TLS=false SKIP_WEB=false SKIP_BESZEL=false DRY_RUN=false ASSUME_YES=false
+SKIP_TAILSCALE=true; [ "$ENABLE_TAILSCALE" = "true" ] && SKIP_TAILSCALE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +57,7 @@ while [ $# -gt 0 ]; do
     --enable-tls) ENABLE_TLS=true; shift ;;
     --skip-web) SKIP_WEB=true; shift ;;
     --skip-beszel) SKIP_BESZEL=true; shift ;;
+    --enable-tailscale) SKIP_TAILSCALE=false; shift ;;
     --disk) DISK="${2%G}"; shift 2 ;;
     --node) NODE_ARG="$2"; shift 2 ;;
     --vlan) VLAN_TAG="$2"; shift 2 ;;
@@ -206,6 +217,7 @@ Timezone:             $TIMEZONE
 Public access:         $( [ "${#PUBLIC_HOSTNAMES[@]}" -gt 0 ] && echo "Cloudflare Tunnel -> ${PUBLIC_HOSTNAMES[*]}" || echo "None (internal only)" )
 Internal HTTPS:         $( $ENABLE_TLS && echo "Let's Encrypt via DNS-01 for $FQDN" || echo "Disabled" )
 Beszel Monitoring:      $( $SKIP_BESZEL && echo "Skipped" || echo "Enabled -> $BESZEL_HUB_URL" )
+Tailscale:              $( $SKIP_TAILSCALE && echo "Not joined (default — pass --enable-tailscale to join)" || echo "Enabled — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH on" )
 ============================================================
 
 PLAN
@@ -334,14 +346,18 @@ log "SSH confirmed as root."
 
 ssh_opts "$PROVISIONING_SSH_KEY"
 
-log "Running bootstrap-container.sh remotely..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/bootstrap-container.sh" "root@$CONTAINER_IP:/tmp/bootstrap-container.sh"
-BOOTSTRAP_OUT="$(ssh "${SSH_OPTS[@]}" "root@$CONTAINER_IP" "chmod +x /tmp/bootstrap-container.sh && /tmp/bootstrap-container.sh '$FQDN' '$TIMEZONE' '$ADMIN_USER' '$SSH_PUBLIC_KEY' && rm -f /tmp/bootstrap-container.sh")"
+log "Running the container_bootstrap Ansible role..."
+BOOTSTRAP_VARS="$(jq -n --arg fqdn "$FQDN" --arg tz "$TIMEZONE" --arg user "$ADMIN_USER" --arg key "$SSH_PUBLIC_KEY" \
+  '{container_bootstrap_fqdn:$fqdn, container_bootstrap_timezone:$tz, container_bootstrap_admin_user:$user, container_bootstrap_ssh_public_key:$key}')"
+ansible_run_playbook_root "playbooks/provisioning/container_bootstrap.yml" "$CONTAINER_IP" "$PROVISIONING_SSH_KEY" "$BOOTSTRAP_VARS" \
+  || die "container_bootstrap Ansible role failed"
 log "Bootstrap complete."
 
 log "Verifying SSH as $ADMIN_USER@$CONTAINER_IP..."
 wait_for_ssh "$PROVISIONING_SSH_KEY" "$ADMIN_USER" "$CONTAINER_IP" 6 5 || die "SSH as $ADMIN_USER failed after bootstrap"
 log "$ADMIN_USER SSH confirmed."
+
+UBUNTU_VERSION="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" 'lsb_release -rs')"
 
 # ---------------------------------------------------------------------------
 # Beszel monitoring agent (default on) — connects outbound to the existing
@@ -351,16 +367,42 @@ log "$ADMIN_USER SSH confirmed."
 # ---------------------------------------------------------------------------
 BESZEL_OK=false
 if ! $SKIP_BESZEL; then
-  log "Installing Beszel monitoring agent..."
+  log "Installing Beszel monitoring agent via Ansible..."
   load_beszel_creds
-  scp "${SSH_OPTS[@]}" "$PROVISIONING_ROOT/common/install-beszel-agent.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-beszel-agent.sh"
-  if printf '%s' "$BESZEL_TOKEN" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-beszel-agent.sh && /tmp/install-beszel-agent.sh '$BESZEL_HUB_URL' '$BESZEL_HUB_KEY' '$BESZEL_PORT' && rm -f /tmp/install-beszel-agent.sh" 2>&1; then
+  BESZEL_VARS="$(jq -n --arg url "$BESZEL_HUB_URL" --arg key "$BESZEL_HUB_KEY" --argjson port "$BESZEL_PORT" --arg token "$BESZEL_TOKEN" \
+    '{beszel_agent_hub_url:$url, beszel_agent_hub_key:$key, beszel_agent_port:$port, beszel_agent_token:$token}')"
+  if ansible_run_playbook "playbooks/provisioning/beszel_agent.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$BESZEL_VARS"; then
     BESZEL_OK=true
     log "Beszel agent connected."
   else
     warn "Beszel agent install/connection failed — check the output above. Not fatal to the rest of provisioning."
   fi
+  unset BESZEL_VARS
+fi
+
+# ---------------------------------------------------------------------------
+# Tailscale (default on) — independent of the tunnel/TLS/web steps below, so
+# it runs early alongside Beszel. Each container gets its own freshly-minted,
+# reusable, non-ephemeral authkey rather than sharing one across containers.
+# ---------------------------------------------------------------------------
+TAILSCALE_OK=false TS_HOSTNAME="" TS_KEY_ID_USED=""
+if ! $SKIP_TAILSCALE; then
+  log "Minting a tagged Tailscale authkey ($TAILSCALE_TAG) for $HOSTNAME_ARG..."
+  load_tailscale_creds
+  tailscale_mint_authkey "proxmox-$HOSTNAME_ARG"
+  TS_KEY_ID_USED="$TS_KEY_ID"
+  TS_HOSTNAME="$HOSTNAME_ARG"
+  log "Installing Tailscale and joining the tailnet as '$TS_HOSTNAME' via Ansible..."
+  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key}')"
+  unset TS_AUTH_KEY
+  if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
+    TAILSCALE_OK=true
+    log "Tailscale joined."
+  else
+    warn "Tailscale install/join failed — continuing with the rest of provisioning. Revoking the unused authkey ($TS_KEY_ID_USED)."
+    tailscale_revoke_key "$TS_KEY_ID_USED"
+  fi
+  unset TAILSCALE_VARS
 fi
 
 # ---------------------------------------------------------------------------
@@ -373,7 +415,7 @@ fi
 TUNNEL_RECORD_ID="" DEDICATED_TUNNEL_ID="" TUNNEL_ZONE_ID="" TUNNEL_ACCOUNT_ID="" LOCAL_OVERRIDE_ID=""
 if [ -n "$PUBLIC_HOSTNAME" ]; then
   log "Provisioning dedicated Cloudflare Tunnel for $PUBLIC_HOSTNAME -> $CONTAINER_IP ..."
-  TUNNEL_OUT="$("$HERE/scripts/install-cloudflare-tunnel.sh" "$HOSTNAME_ARG" "$PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
+  TUNNEL_OUT="$("$PROVISIONING_ROOT/common/install-cloudflare-tunnel.sh" "$HOSTNAME_ARG" "$PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
   DEDICATED_TUNNEL_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ID=' | cut -d= -f2)"
   TUNNEL_RECORD_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_RECORD_ID=' | cut -d= -f2)"
   TUNNEL_ZONE_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ZONE_ID=' | cut -d= -f2)"
@@ -405,15 +447,17 @@ if $ENABLE_TLS; then
   # too, not just Cloudflare's edge cert.
   TLS_DOMAIN_DESC="$FQDN"
   [ -n "$PUBLIC_HOSTNAME" ] && TLS_DOMAIN_DESC="$FQDN + $PUBLIC_HOSTNAME"
-  log "Requesting Let's Encrypt certificate for $TLS_DOMAIN_DESC via DNS-01..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-https-dns01.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-https-dns01.sh"
-  if printf '%s' "$CF_API_TOKEN" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-https-dns01.sh && /tmp/install-https-dns01.sh '$FQDN' '$LETSENCRYPT_EMAIL' ${PUBLIC_HOSTNAME:+'$PUBLIC_HOSTNAME'} && rm -f /tmp/install-https-dns01.sh" 2>&1; then
+  log "Requesting Let's Encrypt certificate for $TLS_DOMAIN_DESC via DNS-01 (Ansible)..."
+  CERTBOT_VARS="$(jq -n --arg fqdn "$FQDN" --arg email "$LETSENCRYPT_EMAIL" --arg token "$CF_API_TOKEN" \
+    --argjson additional "$( [ -n "$PUBLIC_HOSTNAME" ] && jq -n --arg h "$PUBLIC_HOSTNAME" '[$h]' || echo '[]' )" \
+    '{certbot_dns01_fqdn:$fqdn, certbot_dns01_email:$email, certbot_dns01_additional_domains:$additional, certbot_dns01_cf_token:$token}')"
+  if ansible_run_playbook "playbooks/provisioning/certbot_dns01.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CERTBOT_VARS"; then
     TLS_OK=true
     log "Certificate issued for $TLS_DOMAIN_DESC."
   else
     warn "Let's Encrypt DNS-01 issuance failed — check the output above. Not fatal to the rest of provisioning."
   fi
+  unset CERTBOT_VARS
 fi
 
 # ---------------------------------------------------------------------------
@@ -424,21 +468,34 @@ fi
 # ---------------------------------------------------------------------------
 WEB_OK=false
 if ! $SKIP_WEB; then
-  log "Installing minimal test vhost..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-test-vhost.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-test-vhost.sh"
-  if ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-test-vhost.sh && /tmp/install-test-vhost.sh '$FQDN' ${PUBLIC_HOSTNAME:+'$PUBLIC_HOSTNAME'} && rm -f /tmp/install-test-vhost.sh"; then
+  log "Installing minimal test vhost (internal FQDN) via Ansible..."
+  CERT_DIR="/etc/letsencrypt/live/${FQDN}"
+  INTERNAL_VHOST_VARS="$(jq -n --arg host "$FQDN" --argjson ssl "$TLS_OK" --arg cert_dir "$CERT_DIR" \
+    '{site_vhost_hostname:$host, site_vhost_style:"sites_available", site_vhost_is_internal:true, site_vhost_ssl:$ssl, site_vhost_cert_dir:$cert_dir,
+      site_vhost_welcome_subtitle:"Provisioned via the Proxmox LXC provisioning toolkit (internal FQDN)."}')"
+  if ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$INTERNAL_VHOST_VARS"; then
     WEB_OK=true
-    log "Test vhost active."
+    log "Internal test vhost active."
   else
-    warn "Test vhost install failed — check the output above. Not fatal to the rest of provisioning."
+    warn "Internal test vhost install failed — check the output above. Not fatal to the rest of provisioning."
+  fi
+  unset INTERNAL_VHOST_VARS
+
+  if [ -n "$PUBLIC_HOSTNAME" ]; then
+    log "Installing vhost for public hostname $PUBLIC_HOSTNAME via Ansible..."
+    PUBLIC_VHOST_VARS="$(jq -n --arg host "$PUBLIC_HOSTNAME" --argjson ssl "$TLS_OK" --arg cert_dir "$CERT_DIR" \
+      '{site_vhost_hostname:$host, site_vhost_style:"sites_available", site_vhost_is_internal:false, site_vhost_ssl:$ssl, site_vhost_cert_dir:$cert_dir,
+        site_vhost_welcome_subtitle:"Provisioned via the Proxmox LXC provisioning toolkit (public hostname — reached via Cloudflare Tunnel externally, or the local DNS override internally)."}')"
+    if ! ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$PUBLIC_VHOST_VARS"; then
+      warn "Public hostname vhost install failed — check the output above. Not fatal to the rest of provisioning."
+    fi
+    unset PUBLIC_VHOST_VARS
   fi
 fi
 
 # ---------------------------------------------------------------------------
 # Final state + provisioning record
 # ---------------------------------------------------------------------------
-UBUNTU_VERSION="$(echo "$BOOTSTRAP_OUT" | grep '^UBUNTU_VERSION=' | cut -d= -f2)"
 FINAL_NOW="$(date -Iseconds)"
 state_write "$HOSTNAME_ARG" "$(jq -n \
   --arg name "$HOSTNAME_ARG" --arg fqdn "$FQDN" --argjson vmid "$VMID" --arg node "$TARGET_NODE" \
@@ -451,13 +508,15 @@ state_write "$HOSTNAME_ARG" "$(jq -n \
   --arg local_override_id "$LOCAL_OVERRIDE_ID" \
   --argjson tls_enabled "$TLS_OK" --argjson web_enabled "$WEB_OK" --argjson beszel_enabled "$BESZEL_OK" \
   --argjson dns_ok "$DNS_OK" --arg udm_object_id "$UDM_OBJECT_ID" --arg reserved_ip "$RESERVED_IP" \
+  --argjson tailscale_enabled "$TAILSCALE_OK" --arg tailscale_hostname "$TS_HOSTNAME" --arg tailscale_tag "$TAILSCALE_TAG" --arg tailscale_key_id "$TS_KEY_ID_USED" \
   '{name:$name, fqdn:$fqdn, vmid:$vmid, node:$node, mac_address:$mac, public_ipv4:$ip,
     created_at:$created, updated_at:$updated, status:$status, cores:$cores, memory_mb:$memory, disk_gb:$disk,
     ubuntu_version:$ubuntu, tls_enabled:$tls_enabled, web_enabled:$web_enabled, beszel_enabled:$beszel_enabled,
     internal_dns:{configured:true, verified:$dns_ok, udm_object_id:$udm_object_id, reserved_ip:$reserved_ip},
     cloudflare:{tunnel_enabled:$tunnel_enabled, public_hostname:$public_hostname, tunnel_id:$tunnel_id,
                 tunnel_dns_record_id:$tunnel_record_id, tunnel_zone_id:$tunnel_zone_id, account_id:$tunnel_account_id,
-                local_dns_override_id:$local_override_id}}')"
+                local_dns_override_id:$local_override_id},
+    tailscale:{enabled:$tailscale_enabled, hostname:$tailscale_hostname, tag:$tailscale_tag, authkey_id:$tailscale_key_id}}')"
 
 RECORD="$(record_file "$HOSTNAME_ARG")"
 {
@@ -484,6 +543,7 @@ RECORD="$(record_file "$HOSTNAME_ARG")"
   echo "Internal HTTPS (DNS-01):"; echo "$( $TLS_OK && echo "Enabled — https://$FQDN/" || echo 'Not configured' )"; echo
   echo "Test Web Server:"; echo "$( $WEB_OK && echo "Enabled — Apache welcome page" || echo 'Not configured' )"; echo
   echo "Beszel Monitoring:"; echo "$( $BESZEL_OK && echo "Enabled — $BESZEL_HUB_URL" || echo 'Not configured' )"; echo
+  echo "Tailscale:"; echo "$( $TAILSCALE_OK && echo "Joined — hostname '$TS_HOSTNAME', tag $TAILSCALE_TAG, Tailscale SSH on" || echo 'Not joined' )"; echo
   echo "SSH User:"; echo "$ADMIN_USER"; echo
   echo "SSH Command:"; echo "ssh -i $PROVISIONING_SSH_KEY $ADMIN_USER@$FQDN"; echo
   echo "Service:"; echo "None yet — base OS only"; echo
@@ -532,6 +592,9 @@ Internal HTTPS:
 
 Beszel Monitoring:
   $( $BESZEL_OK && echo "Connected to $BESZEL_HUB_URL" || echo "Not configured" )
+
+Tailscale:
+  $( $TAILSCALE_OK && echo "Joined ($TS_HOSTNAME, $TAILSCALE_TAG)" || echo "Not joined" )
 
 Public:
 $( [ -n "$PUBLIC_HOSTNAME" ] && echo "  $PUBLIC_HOSTNAME (primary)

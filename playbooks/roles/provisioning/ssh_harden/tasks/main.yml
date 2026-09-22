@@ -1,0 +1,79 @@
+---
+# Stage 1 of 2 (see also fail2ban_harden) — sshd config + ufw only. Kept as
+# its own role/playbook, invoked separately from fail2ban_harden, so the
+# calling orchestrator can do its own SSH-liveness probe between the two —
+# if a firewall/sshd change locks SSH out, it's caught immediately after
+# this one change rather than after several entangled ones. Ported from
+# provisioning/binarylane/scripts/harden-ssh.sh.
+#
+# Deliberate behavior change from the original script: the bash version
+# only wrote the sshd drop-in if it didn't already exist (write-once
+# guard). This role uses `template`, which converges the file's content on
+# every run — the more correct Ansible pattern, but worth noting since it's
+# a real behavior difference, not just a mechanical port.
+
+- name: Write the sshd hardening drop-in
+  ansible.builtin.template:
+    src: 99-provisioning-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-provisioning-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: "reload ssh"
+
+- name: Validate the effective sshd config
+  # Deliberately not using the template module's own `validate:` parameter
+  # here — that would test the drop-in fragment in isolation, whereas the
+  # original script (and this task) test the real, merged
+  # /etc/ssh/sshd_config as actually installed, which is what matters. If
+  # this fails, the play aborts here and the reload handler above never
+  # fires — a bad config is never actually applied.
+  ansible.builtin.command: sshd -t
+  become: true
+  changed_when: false
+
+- name: Explicitly allow SSH from the management IP
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ ssh_harden_management_ip }}"
+    to_port: '22'
+    proto: tcp
+    comment: "provisioning management IP"
+  become: true
+  when: ssh_harden_management_ip | length > 0
+
+- name: Allow OpenSSH
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+  become: true
+
+- name: Allow HTTP
+  community.general.ufw:
+    rule: allow
+    port: '80'
+    proto: tcp
+  become: true
+
+- name: Allow HTTPS
+  community.general.ufw:
+    rule: allow
+    port: '443'
+    proto: tcp
+  become: true
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+  become: true
+
+- name: Show ufw status
+  ansible.builtin.command: ufw status numbered
+  become: true
+  register: ssh_harden_ufw_status
+  changed_when: false
+
+- name: Report ufw status
+  ansible.builtin.debug:
+    var: ssh_harden_ufw_status.stdout_lines

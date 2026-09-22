@@ -1,0 +1,15 @@
+---
+- name: Reload cloudflared
+  ansible.builtin.systemd:
+    name: cloudflared
+    state: reloaded
+  listen: "reload cloudflared"
+  register: tunnel_ingress_reload_result
+  ignore_errors: true
+
+- name: Restart cloudflared if reload was not supported
+  ansible.builtin.systemd:
+    name: cloudflared
+    state: restarted
+  listen: "reload cloudflared"
+  when: tunnel_ingress_reload_result is failed

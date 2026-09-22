@@ -1,0 +1,15 @@
+---
+# Entry point for the tunnel_ingress role. Invoked by the provisioning
+# orchestrators (bin/add-vhost.sh, bin/provision-*.sh) against a single,
+# already-provisioned target with cloudflared already installed.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/tunnel_ingress.yml \
+#     -e tunnel_ingress_tunnel_id=<id> \
+#     -e '{"tunnel_ingress_hostnames": ["a.example.com", "b.example.com"]}'
+- name: Rewrite cloudflared tunnel ingress
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/tunnel_ingress

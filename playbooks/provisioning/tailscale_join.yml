@@ -1,0 +1,13 @@
+---
+# Entry point for the tailscale_join role.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/tailscale_join.yml \
+#     --extra-vars @/path/to/one-shot-vars.json
+# where the vars file contains {"tailscale_join_hostname": "...", "tailscale_join_authkey": "..."}
+- name: Join a freshly-provisioned host to the tailnet
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/tailscale_join

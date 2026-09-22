@@ -1,0 +1,7 @@
+---
+- name: Create a webroot + Apache vhost for one hostname
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/site_vhost

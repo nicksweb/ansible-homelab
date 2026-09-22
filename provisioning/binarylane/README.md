@@ -25,6 +25,7 @@ Proxmox toolkit if you use both:
 |---|---|
 | `BINARYLANE_API_KEY` | Full BinaryLane account API access |
 | `CLOUDFLARE_API_TOKEN` | DNS edit + Tunnel edit |
+| `TAILSCALE_CLIENTID` / `TAILSCALE_CLIENTSECRET` | Tailscale OAuth client — mints a fresh, tagged authkey per server (see "Tailscale" below) |
 
 `lib/common.sh` also supports legacy per-toolkit fallback files
 (`<repo root>/.binarylane`, `binarylane/.cloudflare`) if you'd rather keep
@@ -55,6 +56,7 @@ hardened, DNS created, reboot-tested, and a record written to
 | `--cloudflare-hostname FQDN` | Public hostname routed through this server's own dedicated tunnel |
 | `--cloudflare-proxy on\|off` | Proxy mode for the base A record (default off — DNS-only, so direct SSH-by-hostname keeps working) |
 | `--enable-tls` | Let's Encrypt cert for the server's own base FQDN |
+| `--skip-tailscale` | Don't join the tailnet (default: joined, tagged `tag:binarylane`, Tailscale SSH on) |
 | `--skip-lamp` / `--skip-mysql` | Skip the LAMP install entirely, or install Apache/PHP without local MySQL |
 | `--db-only` / `--db-allow-from IP[,IP...]` | Standalone MySQL server, firewalled to exactly the given IP(s) |
 | `--skip-harden` | Skip SSH/firewall hardening (not recommended) |
@@ -84,14 +86,33 @@ before relying on the hostname.
 
 ## SSH access
 
-A dedicated Ed25519 key (`PROVISIONING_SSH_KEY`, default
-`~/.ssh/binarylane_provisioning_ed25519`) is created automatically on first
-use and injected via cloud-init. Password SSH and root login are disabled by
-`scripts/harden-ssh.sh` only after a second, independent SSH session has
-confirmed key auth works — hardening never runs blind. It runs in two
-externally-verified stages (`harden-ssh.sh` then `harden-fail2ban.sh`), with
-a reachability check after each, so a lockout is caught immediately after
-the specific change that caused it.
+`PROVISIONING_SSH_KEY` (default `~/.ssh/cipi` — the same admin key used
+across VM/container provisioning and BinaryLane systems, not a
+toolkit-specific generated key) is injected via cloud-init. If it doesn't
+exist yet, generate it first: `ssh-keygen -t ed25519 -f ~/.ssh/cipi`.
+Password SSH and root login are disabled by `scripts/harden-ssh.sh` only
+after a second, independent SSH session has confirmed key auth works —
+hardening never runs blind. It runs in two externally-verified stages
+(`harden-ssh.sh` then `harden-fail2ban.sh`), with a reachability check after
+each, so a lockout is caught immediately after the specific change that
+caused it.
+
+## Tailscale
+
+Every server joins the tailnet by default (`--skip-tailscale` to opt out),
+tagged `tag:binarylane` (owner: `autogroup:admin` in the tailnet ACL) with
+Tailscale SSH enabled — installed *before* the SSH/firewall hardening stage
+above, so it's an already-working fallback access path if hardening ever
+misconfigures sshd/ufw. Each server gets its own freshly-minted, reusable,
+non-ephemeral authkey (via the `TAILSCALE_CLIENTID`/`TAILSCALE_CLIENTSECRET`
+OAuth client) rather than sharing one long-lived key across servers.
+`destroy-server.sh` removes the corresponding device from the tailnet.
+
+Change the tag with `TAILSCALE_TAG` in `config.env` — it must already have a
+`tagOwners` entry in the tailnet ACL (Tailscale rejects OAuth-minted keys for
+tags the policy doesn't recognize), and the OAuth client itself must be
+scoped (in the Tailscale admin console, Settings > OAuth clients) to manage
+that tag.
 
 ```bash
 ./bin/ssh-server.sh webserver01

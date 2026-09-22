@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Shared helper for invoking the Ansible roles under playbooks/roles/provisioning/
+# from a bash orchestrator. Requires common/logging.sh already sourced.
+#
+# Deliberately uses the system temp dir (mktemp's default) for its short-
+# lived inventory/extra-vars files rather than each toolkit's own $STATE_DIR
+# — this file is sometimes sourced by scripts (like
+# common/install-cloudflare-tunnel.sh) that run as a separate process via
+# command substitution, where a caller's own unexported shell variables
+# (STATE_DIR included) don't cross the process boundary. The system temp
+# dir needs no such inheritance and every file written here is deleted
+# before this function returns either way.
+#
+# The orchestrators (provision-server.sh, provision-container.sh, destroy-*.sh)
+# keep doing all cloud/DNS/state-tracking API work directly in bash — only the
+# "SSH to the target and configure it" steps hand off to Ansible, via this
+# function.
+
+ANSIBLE_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# ansible_run_playbook <playbook_relpath> <target_ip> <ssh_user> <ssh_key> [extra_vars_json]
+#
+# <playbook_relpath> is relative to the repo root, e.g.
+# "playbooks/provisioning/tailscale_join.yml".
+#
+# <extra_vars_json>, if given, is written to a mode-600 temp file and passed
+# as `--extra-vars @file` rather than literal `-e key=value` — the latter is
+# visible in `ps` for the life of the ansible-playbook process; a file that's
+# deleted the moment the process returns isn't. This is the closest
+# available equivalent to this toolkit's stdin-secret-piping discipline for
+# values (like a freshly-minted Tailscale authkey or Cloudflare connector
+# token) that only ever exist in this script's own shell variables — never
+# on the control host's disk otherwise.
+ansible_run_playbook() {
+  local playbook_relpath="$1" target_ip="$2" ssh_user="$3" ssh_key="$4" extra_vars_json="${5:-}"
+  local inv_file vars_file rc=0
+
+  inv_file="$(mktemp -t ansible-inventory.XXXXXX)"
+  cat > "$inv_file" <<INV
+[target]
+${target_ip} ansible_user=${ssh_user} ansible_ssh_private_key_file=${ssh_key} ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'
+INV
+
+  local args=(-i "$inv_file" "$ANSIBLE_REPO_ROOT/$playbook_relpath")
+
+  if [ -n "$extra_vars_json" ]; then
+    vars_file="$(mktemp -t ansible-vars.XXXXXX.json)"
+    chmod 600 "$vars_file"
+    printf '%s' "$extra_vars_json" > "$vars_file"
+    args+=(--extra-vars "@$vars_file")
+  fi
+
+  log "Running ansible-playbook $playbook_relpath against $target_ip..."
+  # ansible.cfg is only auto-discovered from the CURRENT WORKING DIRECTORY —
+  # it does NOT search upward through parent directories. The bash
+  # orchestrators run from provisioning/<toolkit>/, not the repo root, so
+  # without this, ansible-playbook silently falls back to built-in defaults
+  # (wrong roles_path, no inventory=, no private_key_file=) — confirmed
+  # directly: "role not found" on a real run despite working fine when
+  # invoked manually from the repo root.
+  ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook "${args[@]}" || rc=$?
+
+  rm -f "$inv_file"
+  [ -n "${vars_file:-}" ] && rm -f "$vars_file"
+  return $rc
+}
+
+# ansible_run_playbook_root <playbook_relpath> <target_ip> <extra_vars_json>
+# Same as above, but connects as root (no ssh key override — used only for
+# container_bootstrap.yml against a stock LXC template, which has no other
+# account yet and is reached with the same provisioning key already
+# implied by the caller's own ssh-agent/known key, passed in explicitly).
+ansible_run_playbook_root() {
+  local playbook_relpath="$1" target_ip="$2" ssh_key="$3" extra_vars_json="${4:-}"
+  ansible_run_playbook "$playbook_relpath" "$target_ip" "root" "$ssh_key" "$extra_vars_json"
+}

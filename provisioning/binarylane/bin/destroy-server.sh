@@ -33,9 +33,12 @@ TUNNEL_ZONE_ID="$(state_read_field "$NAME" '.cloudflare.tunnel_zone_id // empty'
 # Older records (before tunnel_zone_id was tracked separately) assumed the
 # tunnel hostname shared the server's own zone — fall back to that for them.
 [ -z "$TUNNEL_ZONE_ID" ] && TUNNEL_ZONE_ID="$ZONE_ID"
+TAILSCALE_ENABLED="$(state_read_field "$NAME" '.tailscale.enabled // false')"
+TAILSCALE_HOSTNAME="$(state_read_field "$NAME" '.tailscale.hostname // empty')"
 
 load_binarylane_key
 load_cloudflare_creds
+[ "$TAILSCALE_ENABLED" = "true" ] && load_tailscale_creds
 
 # Positively identify the BinaryLane resource before touching it.
 BL="$(bl_api GET "/servers/$SERVER_ID")" || die "Could not fetch BinaryLane server $SERVER_ID to verify identity before deletion"
@@ -64,6 +67,14 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   echo "  The tunnel itself will be deleted via the Cloudflare API (it belongs only to this server)"
 else
   echo "Cloudflare Tunnel: Not Configured"
+fi
+echo
+if [ "$TAILSCALE_ENABLED" = "true" ]; then
+  echo "Tailscale device:"
+  echo "  Hostname: $TAILSCALE_HOSTNAME"
+  echo "  Will be removed from the tailnet via the Tailscale API"
+else
+  echo "Tailscale: Not Configured"
 fi
 echo
 echo "The provisioning record at $(record_file "$NAME") will be KEPT and marked DESTROYED (audit trail)."
@@ -120,6 +131,10 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   fi
 fi
 
+if [ "$TAILSCALE_ENABLED" = "true" ] && [ -n "$TAILSCALE_HOSTNAME" ]; then
+  tailscale_delete_device_by_hostname "$TAILSCALE_HOSTNAME"
+fi
+
 NOW="$(date -Iseconds)"
 state_write "$NAME" "$(jq -n --arg destroyed "$NOW" '. ' <<< "$(cat "$(state_file "$NAME")")" | jq --arg destroyed "$NOW" '.status = "DESTROYED" | .destroyed_at = $destroyed')"
 
@@ -134,6 +149,7 @@ RECORD="$(record_file "$NAME")"
   echo "BinaryLane Server:"; echo "Deleted"
   echo "Cloudflare DNS Record:"; echo "Deleted"
   echo "Cloudflare Tunnel:"; echo "$( [ "$TUNNEL_ENABLED" = "true" ] && echo Deleted || echo 'Not Configured' )"
+  echo "Tailscale:"; echo "$( [ "$TAILSCALE_ENABLED" = "true" ] && echo "Removed ($TAILSCALE_HOSTNAME)" || echo 'Not Configured' )"
 } >> "$RECORD"
 chmod 600 "$RECORD"
 

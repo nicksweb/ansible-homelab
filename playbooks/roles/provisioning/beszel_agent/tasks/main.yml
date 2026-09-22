@@ -1,0 +1,68 @@
+---
+# Installs the Beszel monitoring agent via the official get.beszel.dev
+# installer and registers it with the hub via a universal token. Ported
+# from provisioning/common/install-beszel-agent.sh.
+
+- name: Require hub_url, hub_key, and token
+  ansible.builtin.assert:
+    that:
+      - beszel_agent_hub_url | length > 0
+      - beszel_agent_hub_key | length > 0
+      - beszel_agent_token | length > 0
+    fail_msg: beszel_agent_hub_url, _hub_key, and _token are all required.
+  no_log: true
+
+- name: Download the official Beszel installer
+  ansible.builtin.get_url:
+    url: https://get.beszel.dev
+    dest: /tmp/beszel-official-install.sh
+    mode: '0755'
+    force: true
+
+- name: Run the Beszel installer
+  # Beszel's own installer has two interactive prompts (SSH key, daily
+  # auto-update) unless every value is supplied up front — -k/-t/-url and
+  # --auto-update=true do that. The original bash script also redirects
+  # stdin from /dev/null defensively; Ansible's command module doesn't
+  # attach an interactive stdin to the remote process at all, so that
+  # concern doesn't apply here.
+  ansible.builtin.command: >
+    /tmp/beszel-official-install.sh
+    -p {{ beszel_agent_port }}
+    -k {{ beszel_agent_hub_key | quote }}
+    -t {{ beszel_agent_token | quote }}
+    -url {{ beszel_agent_hub_url | quote }}
+    --auto-update=true
+  become: true
+  no_log: true
+  changed_when: true
+
+- name: Remove the installer
+  ansible.builtin.file:
+    path: /tmp/beszel-official-install.sh
+    state: absent
+
+- name: Verify the agent actually connected to the hub
+  # A single is-active check right after start isn't reliable — it can
+  # catch the service mid-crash-loop, in the few-second window before
+  # systemd's restart backoff registers the failure (confirmed in the
+  # original script's own testing). Poll the log for the line that proves a
+  # genuinely successful hub connection instead of trusting process status
+  # alone.
+  ansible.builtin.shell: journalctl -u beszel-agent --no-pager -n 5 2>/dev/null | grep -q "WebSocket connected"
+  become: true
+  register: beszel_agent_connected
+  until: beszel_agent_connected.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false
+  failed_when: false
+
+- name: Fail if the agent never confirmed a hub connection
+  ansible.builtin.fail:
+    msg: >-
+      Agent did not confirm a WebSocket connection to {{ beszel_agent_hub_url }}
+      within 30s — check 'journalctl -u beszel-agent' on the target. Common
+      causes: wrong hub key, hub unreachable, or the hub's own reverse proxy
+      missing WebSocket support.
+  when: beszel_agent_connected.rc != 0

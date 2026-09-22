@@ -1,0 +1,110 @@
+---
+# Installs Tailscale and joins the tailnet using a pre-authorized, tagged
+# authkey minted by the control-host orchestrator. Ported from
+# provisioning/common/install-tailscale.sh — see that file's header for the
+# secret-handling rationale (never on the control host's disk, never in
+# argv/ps on the target, shredded after use).
+
+- name: Require an authkey
+  ansible.builtin.assert:
+    that: tailscale_join_authkey | length > 0
+    fail_msg: tailscale_join_authkey is required (pass via --extra-vars @file.json).
+  no_log: true
+
+- name: Install Tailscale via the official installer
+  ansible.builtin.shell: curl -fsSL https://tailscale.com/install.sh | sh
+  args:
+    creates: /usr/sbin/tailscaled
+  become: true
+
+- name: Check for /dev/net/tun
+  ansible.builtin.stat:
+    path: /dev/net/tun
+  register: tailscale_join_tun
+
+- name: Configure userspace-networking mode when no TUN device is present
+  # Unprivileged LXC containers have no /dev/net/tun by default (adding it
+  # requires device passthrough as root@pam on the Proxmox host itself, done
+  # once outside this role if at all) — kernel-mode tailscaled just crash-
+  # loops in that case. Full VMs (BinaryLane) always have a real TUN device
+  # and never hit this branch.
+  when: not tailscale_join_tun.stat.exists
+  become: true
+  block:
+    - name: Write /etc/default/tailscaled with userspace-networking flags
+      ansible.builtin.copy:
+        dest: /etc/default/tailscaled
+        content: |
+          PORT=41641
+          FLAGS="--tun=userspace-networking"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Restart tailscaled to apply userspace-networking mode
+      ansible.builtin.systemd:
+        name: tailscaled
+        state: restarted
+        daemon_reload: true
+
+- name: Create a root-only temp file for the authkey
+  ansible.builtin.tempfile:
+    path: /root
+    prefix: .tailscale-authkey.
+  register: tailscale_join_keyfile
+  become: true
+
+- name: Write the authkey to the temp file
+  ansible.builtin.copy:
+    dest: "{{ tailscale_join_keyfile.path }}"
+    content: "{{ tailscale_join_authkey }}"
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+  no_log: true
+
+- name: Join the tailnet
+  ansible.builtin.command: >
+    tailscale up
+    --authkey=file:{{ tailscale_join_keyfile.path }}
+    --hostname={{ tailscale_join_hostname }}
+    --ssh
+    --accept-dns=false
+  become: true
+  no_log: true
+  changed_when: true
+
+- name: Shred the authkey temp file
+  ansible.builtin.command: shred -u {{ tailscale_join_keyfile.path }}
+  become: true
+  changed_when: true
+  failed_when: false
+
+- name: Remove the temp file if shred was unavailable
+  ansible.builtin.file:
+    path: "{{ tailscale_join_keyfile.path }}"
+    state: absent
+  become: true
+
+- name: Verify tailnet connectivity
+  ansible.builtin.shell: >
+    tailscale status --json 2>/dev/null | grep -q '"Online": *true'
+    || tailscale ip -4 >/dev/null 2>&1
+  become: true
+  register: tailscale_join_connected
+  until: tailscale_join_connected.rc == 0
+  retries: 10
+  delay: 2
+  changed_when: false
+
+- name: Report the assigned tailnet IP
+  ansible.builtin.command: tailscale ip -4
+  become: true
+  register: tailscale_join_ip
+  changed_when: false
+  failed_when: false
+
+- name: Show the result
+  ansible.builtin.debug:
+    msg: "Tailscale up on {{ tailscale_join_hostname }}, IP {{ tailscale_join_ip.stdout | default('unknown') }}"

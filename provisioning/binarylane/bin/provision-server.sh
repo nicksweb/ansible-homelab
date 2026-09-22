@@ -23,6 +23,8 @@
 #                                  skipped with a clear warning if DNS hasn't propagated in time.
 #   --letsencrypt-email EMAIL     Contact email for the cert (default: config LETSENCRYPT_EMAIL, or
 #                                  none — registers with --register-unsafely-without-email)
+#   --skip-tailscale               Don't join the server to the tailnet (default: joined,
+#                                  tagged $TAILSCALE_TAG, reachable via Tailscale SSH)
 #   --skip-lamp                   Skip LAMP install
 #   --skip-mysql                  Install Apache/PHP but skip local MySQL (this server
 #                                  expects to connect to a separate --db-only server instead)
@@ -40,6 +42,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="" DOMAIN="" CF_TUNNEL=false CF_HOSTNAME=""
@@ -48,6 +52,7 @@ case "${CLOUDFLARE_PROXY:-false}" in
   *) CF_PROXY="off" ;;
 esac
 SKIP_LAMP=false SKIP_HARDEN=false DRY_RUN=false ASSUME_YES=false
+SKIP_TAILSCALE=false
 SKIP_MYSQL=false DB_ONLY=false DB_ALLOW_FROM=""
 ENABLE_TLS=false LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
 REGION="$BINARYLANE_REGION" PLAN="$BINARYLANE_PLAN" IMAGE="$BINARYLANE_IMAGE"
@@ -64,6 +69,7 @@ while [ $# -gt 0 ]; do
     --cloudflare-proxy) CF_PROXY="$2"; shift 2 ;;
     --enable-tls) ENABLE_TLS=true; shift ;;
     --letsencrypt-email) LETSENCRYPT_EMAIL="$2"; shift 2 ;;
+    --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
     --skip-lamp) SKIP_LAMP=true; shift ;;
     --skip-mysql) SKIP_MYSQL=true; shift ;;
     --db-only) DB_ONLY=true; shift ;;
@@ -115,6 +121,7 @@ if [ -n "$BL_MATCH" ]; then
 fi
 
 load_cloudflare_creds
+$SKIP_TAILSCALE || load_tailscale_creds
 if [ -n "$DOMAIN" ]; then
   log "Resolving Cloudflare zone ID for custom domain '$DOMAIN'..."
   CLOUDFLARE_ZONE_ID="$(resolve_zone_id_for_domain "$DOMAIN")" || exit 1
@@ -219,6 +226,7 @@ Cloudflare Tunnel:   $( $CF_TUNNEL && echo "ENABLED — dedicated per-server tun
 $( $CF_TUNNEL && echo "  Public hostname: $CF_HOSTNAME (proxied CNAME once the tunnel is created)" )
 $( $CF_TUNNEL && echo "  cloudflared will be installed on the new server itself, with only its own connector token" )
 
+Tailscale:            $( $SKIP_TAILSCALE && echo "Disabled" || echo "ENABLED — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH on (installed before hardening, as a fallback access path)" )
 LAMP install:        $LAMP_LINE
 Hardening:            $( $SKIP_HARDEN && echo "Skipped" || echo "Key-only SSH, root login disabled, ufw, fail2ban, unattended-upgrades" )
 Let's Encrypt (base FQDN): $( $ENABLE_TLS && echo "Enabled — real cert for $FQDN, only attempted if DNS has actually propagated" || echo "Disabled" )
@@ -371,6 +379,30 @@ ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo second-session-ok' >/dev/nul
 log "Second SSH session confirmed — safe to proceed with hardening."
 
 # ---------------------------------------------------------------------------
+# Tailscale (optional, default on) — installed before hardening deliberately,
+# so it's an independent, already-working fallback access path (Tailscale
+# SSH) in case the hardening stage below ever misconfigures sshd/ufw.
+# ---------------------------------------------------------------------------
+TAILSCALE_OK=false TS_HOSTNAME="" TS_KEY_ID_USED=""
+if ! $SKIP_TAILSCALE; then
+  log "Minting a tagged Tailscale authkey ($TAILSCALE_TAG) for $NAME..."
+  tailscale_mint_authkey "binarylane-$NAME"
+  TS_KEY_ID_USED="$TS_KEY_ID"
+  TS_HOSTNAME="$NAME"
+  log "Installing Tailscale and joining the tailnet as '$TS_HOSTNAME' via Ansible..."
+  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key}')"
+  unset TS_AUTH_KEY
+  if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
+    TAILSCALE_OK=true
+    log "Tailscale joined."
+  else
+    warn "Tailscale install/join failed — continuing with the rest of provisioning. The minted authkey ($TS_KEY_ID_USED) was never consumed by a device; revoking it."
+    tailscale_revoke_key "$TS_KEY_ID_USED"
+  fi
+  unset TAILSCALE_VARS
+fi
+
+# ---------------------------------------------------------------------------
 # Harden — staged in two steps, each externally verified before the next
 # runs, so a lockout is caught immediately after the specific change that
 # caused it rather than after several entangled firewall/ssh changes.
@@ -383,16 +415,20 @@ if ! $SKIP_HARDEN; then
     warn "Could not resolve $MANAGEMENT_SSH_HOSTNAME — proceeding without an explicit management-IP allow rule"
   fi
 
-  log "Stage 1/2: SSH + firewall hardening..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/harden-ssh.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/harden-ssh.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/harden-ssh.sh && /tmp/harden-ssh.sh '$MANAGEMENT_IP' && rm -f /tmp/harden-ssh.sh"
+  log "Stage 1/2: SSH + firewall hardening (Ansible)..."
+  SSH_HARDEN_VARS="$(jq -n --arg ip "$MANAGEMENT_IP" '{ssh_harden_management_ip:$ip}')"
+  ansible_run_playbook "playbooks/provisioning/ssh_harden.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$SSH_HARDEN_VARS" \
+    || die "ssh_harden Ansible role failed. Server id=$SERVER_ID ip=$PUBLIC_IP — investigate before retrying."
+  unset SSH_HARDEN_VARS
   ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo post-ssh-hardening-ok' >/dev/null 2>&1 \
     || die "SSH broke after the SSH/firewall hardening stage! Server id=$SERVER_ID ip=$PUBLIC_IP — use the BinaryLane console/recovery. (fail2ban was NOT yet touched, so the cause is in sshd_config or ufw.)"
   log "Stage 1/2 complete; SSH still reachable."
 
-  log "Stage 2/2: fail2ban..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/harden-fail2ban.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/harden-fail2ban.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/harden-fail2ban.sh && /tmp/harden-fail2ban.sh '$MANAGEMENT_IP' && rm -f /tmp/harden-fail2ban.sh"
+  log "Stage 2/2: fail2ban (Ansible)..."
+  FAIL2BAN_VARS="$(jq -n --arg ip "$MANAGEMENT_IP" '{fail2ban_harden_management_ip:$ip}')"
+  ansible_run_playbook "playbooks/provisioning/fail2ban_harden.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$FAIL2BAN_VARS" \
+    || die "fail2ban_harden Ansible role failed. Server id=$SERVER_ID ip=$PUBLIC_IP — SSH/ufw were confirmed fine, so this isolates fail2ban as the cause. Use the BinaryLane console/recovery."
+  unset FAIL2BAN_VARS
   ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo post-fail2ban-hardening-ok' >/dev/null 2>&1 \
     || die "SSH broke after the fail2ban stage! Server id=$SERVER_ID ip=$PUBLIC_IP — SSH/ufw were confirmed fine, so this isolates fail2ban as the cause. Use the BinaryLane console/recovery."
   log "Stage 2/2 complete; SSH still reachable."
@@ -403,16 +439,22 @@ fi
 # ---------------------------------------------------------------------------
 LAMP_VERSIONS="" MYSQL_INSTALL_OUT="" DB_CREDS_DISPLAY=""
 if $DB_ONLY; then
-  log "Installing standalone MySQL (db-only server, restricted to: $DB_ALLOW_FROM)..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-mysql-standalone.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-mysql-standalone.sh"
-  MYSQL_INSTALL_OUT="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-mysql-standalone.sh && /tmp/install-mysql-standalone.sh '$DB_ALLOW_FROM' && rm -f /tmp/install-mysql-standalone.sh")"
+  log "Installing standalone MySQL via Ansible (db-only server, restricted to: $DB_ALLOW_FROM)..."
+  MYSQL_VARS="$(jq -n --arg ips "$DB_ALLOW_FROM" '{mysql_standalone_allowed_ips:$ips}')"
+  ansible_run_playbook "playbooks/provisioning/mysql_standalone.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$MYSQL_VARS" \
+    || die "mysql_standalone Ansible role failed"
+  unset MYSQL_VARS
   log "Standalone MySQL install complete."
+  MYSQL_INSTALL_OUT="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'mysql --version' 2>/dev/null || echo "unknown")"
   DB_CREDS_DISPLAY="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'sudo cat /etc/mysql-provisioning-credentials.env')" \
     || warn "Could not retrieve DB credentials for display — check manually via SSH: sudo cat /etc/mysql-provisioning-credentials.env"
 elif ! $SKIP_LAMP; then
-  log "Running install-lamp.sh remotely (this takes a few minutes)..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-lamp.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-lamp.sh"
-  LAMP_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-lamp.sh && /tmp/install-lamp.sh '$FQDN' '$SKIP_MYSQL' && rm -f /tmp/install-lamp.sh")"
+  log "Running the lamp_stack Ansible role (this takes a few minutes)..."
+  LAMP_VARS="$(jq -n --arg fqdn "$FQDN" --argjson skip_mysql "$SKIP_MYSQL" '{lamp_stack_welcome_fqdn:$fqdn, lamp_stack_skip_mysql:$skip_mysql}')"
+  ansible_run_playbook "playbooks/provisioning/lamp_stack.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$LAMP_VARS" \
+    || die "lamp_stack Ansible role failed"
+  unset LAMP_VARS
+  LAMP_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo "PHP: $(php -v | head -1)"; echo "Composer: $(composer --version 2>/dev/null | head -1)"; echo "Apache: $(apache2 -v | head -1)"' 2>/dev/null)"
   log "LAMP install complete."
 fi
 
@@ -424,7 +466,7 @@ fi
 TUNNEL_RECORD_ID="" DEDICATED_TUNNEL_ID="" TUNNEL_ZONE_ID=""
 if $CF_TUNNEL; then
   log "Provisioning dedicated Cloudflare Tunnel for $CF_HOSTNAME -> $PUBLIC_IP ..."
-  TUNNEL_OUT="$("$HERE/scripts/install-cloudflare-tunnel.sh" "$NAME" "$CF_HOSTNAME" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
+  TUNNEL_OUT="$("$PROVISIONING_ROOT/common/install-cloudflare-tunnel.sh" "$NAME" "$CF_HOSTNAME" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
   DEDICATED_TUNNEL_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ID=' | cut -d= -f2)"
   TUNNEL_RECORD_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_RECORD_ID=' | cut -d= -f2)"
   TUNNEL_ZONE_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ZONE_ID=' | cut -d= -f2)"
@@ -456,9 +498,10 @@ if $ENABLE_TLS; then
   elif ! $DNS_OK; then
     TLS_SKIPPED_REASON="DNS for $FQDN had not confirmed propagation — run manually once it has: ssh-server.sh $NAME -- sudo certbot --apache -d $FQDN --agree-tos --redirect"
   else
-    log "Requesting Let's Encrypt certificate for $FQDN..."
-    scp "${SSH_OPTS[@]}" "$HERE/scripts/install-certbot.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-certbot.sh"
-    if ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-certbot.sh && /tmp/install-certbot.sh '$FQDN' '$LETSENCRYPT_EMAIL' && rm -f /tmp/install-certbot.sh"; then
+    log "Requesting Let's Encrypt certificate for $FQDN via Ansible..."
+    CERTBOT_VARS="$(jq -n --arg fqdn "$FQDN" --arg email "$LETSENCRYPT_EMAIL" '{certbot_http01_fqdn:$fqdn, certbot_http01_email:$email}')"
+    if ansible_run_playbook "playbooks/provisioning/certbot_http01.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CERTBOT_VARS"; then
+      unset CERTBOT_VARS
       HTTPS_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://$FQDN/" || true)"
       if [ "$HTTPS_CODE" = "200" ]; then
         TLS_OK=true
@@ -521,11 +564,13 @@ state_write "$NAME" "$(jq -n \
   --argjson tunnel_enabled "$CF_TUNNEL" --arg tunnel_hostname "$CF_HOSTNAME" --arg tunnel_record_id "$TUNNEL_RECORD_ID" \
   --arg tunnel_id "$DEDICATED_TUNNEL_ID" --arg tunnel_zone_id "$TUNNEL_ZONE_ID" \
   --arg role "$ROLE" --argjson db_only "$DB_ONLY" --arg db_allow_from "$DB_ALLOW_FROM" \
+  --argjson tailscale_enabled "$TAILSCALE_OK" --arg tailscale_hostname "$TS_HOSTNAME" --arg tailscale_tag "$TAILSCALE_TAG" --arg tailscale_key_id "$TS_KEY_ID_USED" \
   '{name:$name, fqdn:$fqdn, binarylane_server_id:$server_id, region:$region, plan:$plan, image_id:$image_id,
     created_at:$created, updated_at:$updated, status:$status, public_ipv4:$ip, ssh_key_fingerprint:$fingerprint,
     role:$role,
     cloudflare:{zone_id:$zone_id, dns_record_id:$a_record_id, tunnel_enabled:$tunnel_enabled, tunnel_hostname:$tunnel_hostname, tunnel_dns_record_id:$tunnel_record_id, tunnel_id:$tunnel_id, tunnel_zone_id:$tunnel_zone_id},
-    mysql:{db_only:$db_only, allowed_from:$db_allow_from, credentials_file:(if $db_only then "/etc/mysql-provisioning-credentials.env" else null end)}}')"
+    mysql:{db_only:$db_only, allowed_from:$db_allow_from, credentials_file:(if $db_only then "/etc/mysql-provisioning-credentials.env" else null end)},
+    tailscale:{enabled:$tailscale_enabled, hostname:$tailscale_hostname, tag:$tailscale_tag, authkey_id:$tailscale_key_id}}')"
 
 RECORD="$(record_file "$NAME")"
 {
@@ -581,6 +626,12 @@ RECORD="$(record_file "$NAME")"
   echo "Cloudflare Tunnel DNS Record ID:"; echo "$( $CF_TUNNEL && echo "$TUNNEL_RECORD_ID" || echo 'Not Configured' )"; echo
   echo
   echo "============================================================"
+  echo "Tailscale"
+  echo "============================================================"
+  echo
+  echo "Tailscale:"; echo "$( $TAILSCALE_OK && echo "Joined — hostname '$TS_HOSTNAME', tag $TAILSCALE_TAG, Tailscale SSH on" || echo "Not joined" )"; echo
+  echo
+  echo "============================================================"
   echo "TLS (base FQDN — the tunnel hostname, if any, uses Cloudflare's edge TLS instead)"
   echo "============================================================"
   echo
@@ -631,6 +682,7 @@ Region / Plan:           $REGION / $PLAN
 Image:                    $IMAGE_FULLNAME
 Cloudflare DNS Record:   $A_RECORD_ID ($( [ "$CF_PROXY" = "on" ] && echo Proxied || echo "DNS Only" ))
 Cloudflare Tunnel:        $( $CF_TUNNEL && echo "Enabled ($CF_HOSTNAME)" || echo Disabled )
+Tailscale:                $( $TAILSCALE_OK && echo "Joined ($TS_HOSTNAME, $TAILSCALE_TAG)" || echo "Not joined" )
 Let's Encrypt:            $( $TLS_OK && echo "https://$FQDN/" || echo "Not enabled" )
 SSH Command:              ssh -i $PROVISIONING_SSH_KEY $ADMIN_USER@$FQDN
 Provisioning Record:      $RECORD

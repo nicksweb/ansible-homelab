@@ -1,0 +1,7 @@
+tunnel: {{ tunnel_ingress_tunnel_id }}
+ingress:
+{% for h in tunnel_ingress_hostnames %}
+  - hostname: {{ h }}
+    service: {{ tunnel_ingress_service }}
+{% endfor %}
+  - service: http_status:404

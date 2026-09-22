@@ -13,6 +13,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: deploy-mariadb-stack.sh <hostname> [--dry-run] [--yes]}"
@@ -62,17 +64,15 @@ fi
 
 ssh_opts "$PROVISIONING_SSH_KEY"
 
-log "Installing Docker (skips cleanly if already installed)..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/install-docker.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-docker.sh"
-ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-  "chmod +x /tmp/install-docker.sh && /tmp/install-docker.sh && rm -f /tmp/install-docker.sh" \
+log "Installing Docker (via Ansible; skips cleanly if already installed)..."
+ansible_run_playbook "playbooks/provisioning/docker_engine.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" \
   || die "Docker installation failed"
 
-log "Deploying the stack..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/install-mariadb-stack.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-mariadb-stack.sh"
-ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-  "chmod +x /tmp/install-mariadb-stack.sh && /tmp/install-mariadb-stack.sh '$FQDN' && rm -f /tmp/install-mariadb-stack.sh" \
+log "Deploying the stack (via Ansible)..."
+MARIADB_VARS="$(jq -n --arg fqdn "$FQDN" '{mariadb_stack_fqdn:$fqdn}')"
+ansible_run_playbook "playbooks/provisioning/mariadb_stack.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$MARIADB_VARS" \
   || die "Stack deployment failed"
+unset MARIADB_VARS
 
 log "Verifying HTTPS access to phpMyAdmin..."
 HTTP_OK=false

@@ -15,6 +15,8 @@ source "$HERE/lib/common.sh"
 source "$PROVISIONING_ROOT/common/udm.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/cloudflare.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/tailscale.sh"
 require_jq
 
 NAME="${1:?usage: destroy-container.sh <hostname> [--yes]}"
@@ -38,6 +40,8 @@ PUBLIC_HOSTNAME="$(state_read_field "$NAME" '.cloudflare.public_hostname // empt
 LOCAL_OVERRIDE_ID="$(state_read_field "$NAME" '.cloudflare.local_dns_override_id // empty')"
 ADDITIONAL_HOSTNAMES_JSON="$(state_read_field "$NAME" '.cloudflare.additional_hostnames // []')"
 ADDITIONAL_COUNT="$(echo "$ADDITIONAL_HOSTNAMES_JSON" | jq 'length')"
+TAILSCALE_ENABLED="$(state_read_field "$NAME" '.tailscale.enabled // false')"
+TAILSCALE_HOSTNAME="$(state_read_field "$NAME" '.tailscale.hostname // empty')"
 
 load_proxmox_creds
 
@@ -76,6 +80,12 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   fi
 else
   echo "Cloudflare Tunnel: Not configured"
+fi
+echo
+if [ "$TAILSCALE_ENABLED" = "true" ]; then
+  echo "Tailscale device: $TAILSCALE_HOSTNAME (will be removed from the tailnet via the Tailscale API)"
+else
+  echo "Tailscale: Not configured"
 fi
 echo
 echo "The provisioning record at $(record_file "$NAME") will be KEPT and marked DESTROYED (audit trail)."
@@ -156,6 +166,11 @@ if [ "$DNS_CONFIGURED" = "true" ]; then
   fi
 fi
 
+if [ "$TAILSCALE_ENABLED" = "true" ] && [ -n "$TAILSCALE_HOSTNAME" ]; then
+  load_tailscale_creds
+  tailscale_delete_device_by_hostname "$TAILSCALE_HOSTNAME"
+fi
+
 NOW="$(date -Iseconds)"
 state_write "$NAME" "$(jq --arg destroyed "$NOW" '.status = "DESTROYED" | .destroyed_at = $destroyed' "$(state_file "$NAME")")"
 
@@ -172,6 +187,7 @@ RECORD="$(record_file "$NAME")"
   echo "Cloudflare Tunnel:"; echo "$( [ "$TUNNEL_ENABLED" = "true" ] && echo Deleted || echo 'Not Configured' )"
   echo "Local DNS Override:"; echo "$( [ -n "$LOCAL_OVERRIDE_ID" ] && echo Deleted || echo 'Not Configured' )"
   echo "Additional Vhosts:"; echo "$( [ "$ADDITIONAL_COUNT" -gt 0 ] && echo "Deleted ($ADDITIONAL_COUNT)" || echo 'None' )"
+  echo "Tailscale:"; echo "$( [ "$TAILSCALE_ENABLED" = "true" ] && echo "Removed ($TAILSCALE_HOSTNAME)" || echo 'Not Configured' )"
 } >> "$RECORD"
 chmod 600 "$RECORD"
 

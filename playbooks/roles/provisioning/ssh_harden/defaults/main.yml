@@ -1,0 +1,5 @@
+---
+# An address (typically the control host's own) that gets an explicit ufw
+# allow rule for port 22, in addition to the general OpenSSH allow-from-
+# anywhere rule. Empty is valid — just skips that one extra rule.
+ssh_harden_management_ip: ""

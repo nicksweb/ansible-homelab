@@ -171,12 +171,12 @@ plan and asks for confirmation before creating anything (`--yes` to skip,
 
 ### SSH key
 
-Uses `PROVISIONING_SSH_KEY` (default `~/.ssh/homelab_provisioning`) — not a
-freshly generated one, so it can reuse a key you already trust and have
-distributed.
+Uses `PROVISIONING_SSH_KEY` (default `~/.ssh/cipi` — the same admin key used
+across VM/container provisioning and BinaryLane systems) — not a freshly
+generated one, so it can reuse a key you already trust and have distributed.
 
 ```bash
-ssh -i ~/.ssh/homelab_provisioning localadmin@<fqdn>
+ssh -i ~/.ssh/cipi localadmin@<fqdn>
 ```
 
 ## IP allocation
@@ -375,7 +375,7 @@ Cloudflare API and the UDM's client list.
 
 ```bash
 ping <IP>
-ssh -i ~/.ssh/homelab_provisioning localadmin@<fqdn>
+ssh -i ~/.ssh/cipi localadmin@<fqdn>
 curl -I http://<fqdn>/
 dig <public-hostname> @<UDM IP>        # should return the container's own IP (local override)
 dig <public-hostname> @8.8.8.8         # should return Cloudflare's edge IPs

@@ -1,0 +1,6 @@
+[DEFAULT]
+banaction = iptables-multiport
+ignoreip = 127.0.0.1/8 ::1{% if fail2ban_harden_management_ip %} {{ fail2ban_harden_management_ip }}{% endif %}
+
+[sshd]
+enabled = true

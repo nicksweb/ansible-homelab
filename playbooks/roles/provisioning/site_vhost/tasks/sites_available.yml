@@ -1,0 +1,103 @@
+---
+- name: Open ufw for HTTP/HTTPS
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ['80', '443']
+  become: true
+
+- name: Disable the default site
+  ansible.builtin.command: a2dissite 000-default
+  become: true
+  changed_when: true
+  failed_when: false
+
+- name: Compute the conf name and webroot
+  ansible.builtin.set_fact:
+    site_vhost_conf_name: "{{ '000-internal' if site_vhost_is_internal else 'site-' + (site_vhost_hostname | regex_replace('[^a-zA-Z0-9]', '-')) }}"
+    site_vhost_effective_webroot: "{{ '/var/www/html' if site_vhost_is_internal else '/var/www/' + site_vhost_hostname }}"
+
+- name: Create the webroot
+  ansible.builtin.file:
+    path: "{{ site_vhost_effective_webroot }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  become: true
+
+- name: Write the welcome page
+  ansible.builtin.template:
+    src: welcome_page.html.j2
+    dest: "{{ site_vhost_effective_webroot }}/index.html"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+  become: true
+
+- name: Write the HTTP vhost
+  ansible.builtin.template:
+    src: sites_available_http.conf.j2
+    dest: "/etc/apache2/sites-available/{{ site_vhost_conf_name }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Enable the HTTP site
+  ansible.builtin.command: "a2ensite {{ site_vhost_conf_name }}"
+  become: true
+  changed_when: true
+  failed_when: false
+
+- name: Check for an existing Let's Encrypt cert
+  ansible.builtin.stat:
+    path: "{{ site_vhost_cert_dir }}/fullchain.pem"
+  register: site_vhost_cert_stat
+  become: true
+  when: site_vhost_ssl
+
+- name: Check whether the cert covers this hostname
+  # Only meaningful for a public (non-internal) hostname — the internal
+  # FQDN's own cert always covers itself by definition. install-https-
+  # dns01.sh adds each public hostname as an extra SAN on the same cert
+  # rather than issuing a separate one per hostname, so this could be
+  # false if --enable-tls ran before this hostname was ever added.
+  ansible.builtin.command: openssl x509 -in {{ site_vhost_cert_dir }}/fullchain.pem -noout -ext subjectAltName
+  register: site_vhost_cert_sans
+  become: true
+  changed_when: false
+  when: site_vhost_ssl and site_vhost_cert_stat.stat.exists and not site_vhost_is_internal
+
+- name: Determine whether HTTPS should be wired up for this vhost
+  ansible.builtin.set_fact:
+    site_vhost_wire_ssl: >-
+      {{ site_vhost_ssl and site_vhost_cert_stat.stat.exists
+         and (site_vhost_is_internal or ('DNS:' + site_vhost_hostname in (site_vhost_cert_sans.stdout | default(''))))
+      }}
+  when: site_vhost_ssl
+
+- name: Write the SSL vhost
+  ansible.builtin.template:
+    src: sites_available_ssl.conf.j2
+    dest: "/etc/apache2/sites-available/{{ site_vhost_conf_name }}-ssl.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: site_vhost_ssl and site_vhost_wire_ssl | default(false)
+
+- name: Enable Apache SSL module and the SSL site
+  when: site_vhost_ssl and site_vhost_wire_ssl | default(false)
+  become: true
+  block:
+    - name: Enable mod_ssl
+      community.general.apache2_module:
+        name: ssl
+        state: present
+
+    - name: Enable the SSL site
+      ansible.builtin.command: "a2ensite {{ site_vhost_conf_name }}-ssl"
+      changed_when: true
+      failed_when: false

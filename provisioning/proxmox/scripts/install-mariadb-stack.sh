@@ -177,6 +177,15 @@ if [ -n "\$DOCKER_SUBNET" ]; then
     iptables -I DOCKER-USER 1 -p tcp --dport ${DB_PORT} -s "\$DOCKER_SUBNET" -j ACCEPT
 fi
 
+# Tailscale's CGNAT range — lets any tailnet member (onsite or cloud, e.g. a
+# BinaryLane app server with --enable-tailscale) reach this DB over the
+# tailnet, same as the internal LAN. Harmless to always include even if this
+# container never joins a tailnet itself: reaching it requires the peer to
+# already be an authorized tailnet member (enforced by the tailnet's own
+# ACL), so this doesn't widen access beyond what Tailscale itself gates.
+iptables -C DOCKER-USER -p tcp --dport ${DB_PORT} -s 100.64.0.0/10 -j ACCEPT 2>/dev/null || \\
+  iptables -I DOCKER-USER 1 -p tcp --dport ${DB_PORT} -s 100.64.0.0/10 -j ACCEPT
+
 iptables -C DOCKER-USER -p tcp --dport ${DB_PORT} -j DROP 2>/dev/null || \\
   iptables -A DOCKER-USER -p tcp --dport ${DB_PORT} -j DROP
 EOF

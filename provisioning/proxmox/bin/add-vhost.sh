@@ -25,6 +25,8 @@ source "$HERE/lib/common.sh"
 source "$PROVISIONING_ROOT/common/cloudflare.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/udm.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: add-vhost.sh <container_hostname> <public_hostname> [--enable-tls] [--dry-run] [--yes]}"
@@ -102,15 +104,13 @@ if ! $ASSUME_YES; then
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || { log "Aborted by user."; exit 1; }
 fi
 
-ssh_opts "$PROVISIONING_SSH_KEY"
-
 # ---------------------------------------------------------------------------
 # Tunnel: reuse (add a route to the existing one) or create fresh.
 # ---------------------------------------------------------------------------
 NEW_RECORD_ID="" NEW_ZONE_ID="" NEW_ACCOUNT_ID=""
 if ! $TUNNEL_ENABLED; then
   log "No existing tunnel for $NAME — creating a new dedicated tunnel for $NEW_PUBLIC_HOSTNAME..."
-  TUNNEL_OUT="$("$HERE/scripts/install-cloudflare-tunnel.sh" "$NAME" "$NEW_PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
+  TUNNEL_OUT="$("$PROVISIONING_ROOT/common/install-cloudflare-tunnel.sh" "$NAME" "$NEW_PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
   TUNNEL_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ID=' | cut -d= -f2)"
   NEW_RECORD_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_RECORD_ID=' | cut -d= -f2)"
   NEW_ZONE_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ZONE_ID=' | cut -d= -f2)"
@@ -124,21 +124,19 @@ else
   NEW_ACCOUNT_ID="$(state_read_field "$NAME" '.cloudflare.account_id')"
   log "CNAME record id: $NEW_RECORD_ID"
 
-  log "Updating tunnel ingress on $CONTAINER_IP to include $NEW_PUBLIC_HOSTNAME..."
+  log "Updating tunnel ingress on $CONTAINER_IP to include $NEW_PUBLIC_HOSTNAME (via Ansible)..."
   ALL_HOSTNAMES=()
   [ -n "$PRIMARY_PUBLIC" ] && ALL_HOSTNAMES+=("$PRIMARY_PUBLIC")
   while IFS= read -r h; do [ -n "$h" ] && ALL_HOSTNAMES+=("$h"); done \
     < <(state_read_field "$NAME" '.cloudflare.additional_hostnames[]?.hostname // empty')
   ALL_HOSTNAMES+=("$NEW_PUBLIC_HOSTNAME")
 
-  REMOTE_HOSTNAME_ARGS=""
-  for h in "${ALL_HOSTNAMES[@]}"; do
-    REMOTE_HOSTNAME_ARGS="$REMOTE_HOSTNAME_ARGS '$h'"
-  done
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/update-tunnel-ingress.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/update-tunnel-ingress.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-    "chmod +x /tmp/update-tunnel-ingress.sh && /tmp/update-tunnel-ingress.sh '$TUNNEL_ID'$REMOTE_HOSTNAME_ARGS && rm -f /tmp/update-tunnel-ingress.sh" \
+  HOSTNAMES_JSON="$(printf '%s\n' "${ALL_HOSTNAMES[@]}" | sort -u | jq -R . | jq -s .)"
+  TUNNEL_INGRESS_VARS="$(jq -n --arg tid "$TUNNEL_ID" --argjson hostnames "$HOSTNAMES_JSON" \
+    '{tunnel_ingress_tunnel_id:$tid, tunnel_ingress_hostnames:$hostnames}')"
+  ansible_run_playbook "playbooks/provisioning/tunnel_ingress.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TUNNEL_INGRESS_VARS" \
     || die "Failed to update tunnel ingress on the container"
+  unset TUNNEL_INGRESS_VARS
 fi
 
 # ---------------------------------------------------------------------------
@@ -158,15 +156,17 @@ log "Local DNS override ready (id: $NEW_OVERRIDE_ID)"
 TLS_COVERED=false
 if $TLS_ENABLED || $ENABLE_TLS; then
   load_cloudflare_token
-  log "Ensuring the certificate for $FQDN covers $NEW_PUBLIC_HOSTNAME too..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-https-dns01.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-https-dns01.sh"
-  if printf '%s' "$CF_API_TOKEN" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-https-dns01.sh && /tmp/install-https-dns01.sh '$FQDN' '$LETSENCRYPT_EMAIL' '$NEW_PUBLIC_HOSTNAME' && rm -f /tmp/install-https-dns01.sh" 2>&1; then
+  log "Ensuring the certificate for $FQDN covers $NEW_PUBLIC_HOSTNAME too (via Ansible)..."
+  CERTBOT_VARS="$(jq -n --arg fqdn "$FQDN" --arg email "$LETSENCRYPT_EMAIL" --arg token "$CF_API_TOKEN" \
+    --argjson additional "$(jq -n --arg h "$NEW_PUBLIC_HOSTNAME" '[$h]')" \
+    '{certbot_dns01_fqdn:$fqdn, certbot_dns01_email:$email, certbot_dns01_additional_domains:$additional, certbot_dns01_cf_token:$token}')"
+  if ansible_run_playbook "playbooks/provisioning/certbot_dns01.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CERTBOT_VARS"; then
     TLS_COVERED=true
     log "Certificate now covers $NEW_PUBLIC_HOSTNAME."
   else
     warn "Certificate issuance/expansion failed — check the output above. The vhost will still be created but will be HTTP only until this is resolved."
   fi
+  unset CERTBOT_VARS
 else
   log "Container has no TLS and --enable-tls wasn't passed — vhost will be HTTP only."
 fi
@@ -174,16 +174,19 @@ fi
 # ---------------------------------------------------------------------------
 # Web vhost
 # ---------------------------------------------------------------------------
-log "Installing vhost for $NEW_PUBLIC_HOSTNAME..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/install-test-vhost.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-test-vhost.sh"
+log "Installing vhost for $NEW_PUBLIC_HOSTNAME (via Ansible)..."
+CERT_DIR="/etc/letsencrypt/live/${FQDN}"
+VHOST_VARS="$(jq -n --arg host "$NEW_PUBLIC_HOSTNAME" --argjson ssl "$TLS_COVERED" --arg cert_dir "$CERT_DIR" \
+  '{site_vhost_hostname:$host, site_vhost_style:"sites_available", site_vhost_is_internal:false, site_vhost_ssl:$ssl, site_vhost_cert_dir:$cert_dir,
+    site_vhost_welcome_subtitle:"Provisioned via add-vhost.sh (additional public hostname)."}')"
 WEB_OK=false
-if ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-    "chmod +x /tmp/install-test-vhost.sh && /tmp/install-test-vhost.sh '$FQDN' '$NEW_PUBLIC_HOSTNAME' && rm -f /tmp/install-test-vhost.sh"; then
+if ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$VHOST_VARS"; then
   WEB_OK=true
   log "Vhost active."
 else
   warn "Vhost install failed — check the output above."
 fi
+unset VHOST_VARS
 
 # ---------------------------------------------------------------------------
 # State + provisioning record

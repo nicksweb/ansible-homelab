@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# net.bridge.bridge-nf-call-iptables=1 (Docker's default) means
+# container-to-container traffic on the SAME Docker network ALSO traverses
+# the iptables FORWARD chain, including DOCKER-USER — not just externally
+# -sourced traffic to the published port. Without also allowing the
+# compose stack's own bridge subnet here, phpMyAdmin's own connection to
+# MariaDB gets silently dropped by the exact rule meant to keep OTHER
+# hosts out, since phpMyAdmin's container IP isn't in {{ mariadb_stack_allowed_cidr }}.
+DOCKER_SUBNET=""
+for i in $(seq 1 10); do
+  DOCKER_SUBNET="$(docker network inspect mariadb-stack_backend --format '{{ '{{' }}range .IPAM.Config{{ '}}' }}{{ '{{' }}.Subnet{{ '}}' }}{{ '{{' }}end{{ '}}' }}' 2>/dev/null || true)"
+  [ -n "$DOCKER_SUBNET" ] && break
+  sleep 2
+done
+
+iptables -C DOCKER-USER -p tcp --dport {{ mariadb_stack_db_port }} -s {{ mariadb_stack_allowed_cidr }} -j ACCEPT 2>/dev/null || \
+  iptables -I DOCKER-USER 1 -p tcp --dport {{ mariadb_stack_db_port }} -s {{ mariadb_stack_allowed_cidr }} -j ACCEPT
+
+if [ -n "$DOCKER_SUBNET" ]; then
+  iptables -C DOCKER-USER -p tcp --dport {{ mariadb_stack_db_port }} -s "$DOCKER_SUBNET" -j ACCEPT 2>/dev/null || \
+    iptables -I DOCKER-USER 1 -p tcp --dport {{ mariadb_stack_db_port }} -s "$DOCKER_SUBNET" -j ACCEPT
+fi
+
+# Tailscale's CGNAT range — lets any tailnet member (onsite or cloud, e.g.
+# a BinaryLane app server with tailscale_join applied) reach this DB over
+# the tailnet, same as the internal LAN. Harmless to always include even
+# if this container never joins a tailnet itself: reaching it requires
+# the peer to already be an authorized tailnet member (enforced by the
+# tailnet's own ACL), so this doesn't widen access beyond what Tailscale
+# itself gates.
+iptables -C DOCKER-USER -p tcp --dport {{ mariadb_stack_db_port }} -s 100.64.0.0/10 -j ACCEPT 2>/dev/null || \
+  iptables -I DOCKER-USER 1 -p tcp --dport {{ mariadb_stack_db_port }} -s 100.64.0.0/10 -j ACCEPT
+
+iptables -C DOCKER-USER -p tcp --dport {{ mariadb_stack_db_port }} -j DROP 2>/dev/null || \
+  iptables -A DOCKER-USER -p tcp --dport {{ mariadb_stack_db_port }} -j DROP

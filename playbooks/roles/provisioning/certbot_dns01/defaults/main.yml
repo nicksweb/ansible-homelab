@@ -1,0 +1,9 @@
+---
+certbot_dns01_fqdn: ""
+certbot_dns01_email: ""
+certbot_dns01_additional_domains: []
+
+# The Cloudflare API token used by certbot's DNS plugin. Secret — pass via
+# extra-vars file, not literal -e (see tailscale_join's defaults for the
+# rationale). Every task touching this is no_log: true.
+certbot_dns01_cf_token: ""

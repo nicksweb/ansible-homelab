@@ -1,0 +1,7 @@
+---
+- name: Install and register the Beszel monitoring agent
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/beszel_agent

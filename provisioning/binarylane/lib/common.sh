@@ -5,6 +5,7 @@
 set -uo pipefail
 
 TOOLKIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROVISIONING_ROOT="$(cd "$TOOLKIT_ROOT/.." && pwd)"
 SRC_ROOT="$(cd "$TOOLKIT_ROOT/../.." && pwd)"
 STATE_DIR="$TOOLKIT_ROOT/state"
 
@@ -28,9 +29,11 @@ warn() { log "WARN: $*"; }
 : "${ENABLE_LAMP:=true}"
 : "${ENABLE_CLOUDFLARE_TUNNEL:=false}"
 : "${CLOUDFLARE_PROXY:=false}"
+: "${ENABLE_TAILSCALE:=true}"
+: "${TAILSCALE_TAG:=tag:binarylane}"  # must have a tagOwners entry in the tailnet ACL — OAuth-minted keys always carry a tag
 : "${BINARYLANE_CREDENTIAL_FILE:=$SRC_ROOT/.binarylane}"
 : "${CLOUDFLARE_CREDENTIAL_FILE:=$TOOLKIT_ROOT/.cloudflare}"
-: "${PROVISIONING_SSH_KEY:=$HOME/.ssh/binarylane_provisioning_ed25519}"
+: "${PROVISIONING_SSH_KEY:=$HOME/.ssh/cipi}"
 : "${CLOUDFLARE_ZONE_ID:=}"     # zone id for SERVER_DOMAIN — non-secret, from the Cloudflare dashboard or `GET /zones?name=<domain>`
 : "${CLOUDFLARE_ACCOUNT_ID:=}"  # your Cloudflare account id — non-secret, from the dashboard or `GET /accounts`
 : "${MANAGEMENT_SSH_HOSTNAME:=manage.example.com}"  # resolved fresh each run, explicitly allowed through ufw + fail2ban ignoreip on every provisioned server
@@ -77,6 +80,93 @@ load_cloudflare_creds() {
   [ -n "$CF_API_TOKEN" ] || die "Could not parse a Cloudflare API token from $API_AUTH_FILE or $CLOUDFLARE_CREDENTIAL_FILE"
   CF_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"
   export CF_API_TOKEN CF_ACCOUNT_ID
+}
+
+load_tailscale_creds() {
+  # OAuth client credentials, not a plain authkey — this toolkit mints a
+  # fresh, tagged authkey per server from these at provisioning time (see
+  # tailscale_mint_authkey below) rather than reusing one long-lived key.
+  [ -f "$API_AUTH_FILE" ] || die "Tailscale credentials not found — expected $API_AUTH_FILE"
+  TAILSCALE_CLIENTID="$(sed -n 's/^TAILSCALE_CLIENTID=//p' "$API_AUTH_FILE" | head -n1)"
+  TAILSCALE_CLIENTSECRET="$(sed -n 's/^TAILSCALE_CLIENTSECRET=//p' "$API_AUTH_FILE" | head -n1)"
+  [ -n "$TAILSCALE_CLIENTID" ] && [ -n "$TAILSCALE_CLIENTSECRET" ] \
+    || die "Could not parse TAILSCALE_CLIENTID/TAILSCALE_CLIENTSECRET from $API_AUTH_FILE"
+  export TAILSCALE_CLIENTID TAILSCALE_CLIENTSECRET
+}
+
+# ---------------------------------------------------------------------------
+# Tailscale — OAuth client credentials in, a short-lived API access token and
+# per-server tagged authkeys out. Never persisted to disk; live only in shell
+# variables for the duration of one provisioning run.
+# ---------------------------------------------------------------------------
+TS_API_BASE="https://api.tailscale.com/api/v2"
+
+tailscale_access_token() {
+  # Caches the token in TS_ACCESS_TOKEN for the rest of this run — every
+  # call here is a fresh 'die if empty' check, not a silent reuse of a
+  # possibly-stale/empty value.
+  if [ -z "${TS_ACCESS_TOKEN:-}" ]; then
+    local resp
+    resp="$(curl -s -X POST "$TS_API_BASE/oauth/token" \
+      -d "client_id=$TAILSCALE_CLIENTID" -d "client_secret=$TAILSCALE_CLIENTSECRET")"
+    TS_ACCESS_TOKEN="$(echo "$resp" | jq -r '.access_token // empty')"
+    [ -n "$TS_ACCESS_TOKEN" ] || die "Tailscale OAuth token request failed: $(echo "$resp" | jq -c '.' 2>/dev/null || echo "$resp")"
+  fi
+  echo "$TS_ACCESS_TOKEN"
+}
+
+# tailscale_mint_authkey <description> — mints a reusable, pre-authorized,
+# non-ephemeral authkey tagged $TAILSCALE_TAG (device stays listed in the
+# tailnet even while offline — matches these servers being always-on
+# infrastructure, not throwaway CI runners). Sets TS_KEY_ID (safe to log/
+# store in state — not secret, only used to revoke the key later) and
+# TS_AUTH_KEY (secret — caller must pipe it to the remote host over stdin,
+# same discipline as every other credential in this toolkit, never as an
+# argument or into a file this script controls the lifetime of).
+tailscale_mint_authkey() {
+  local desc="${1:-binarylane-provisioning}"
+  local token payload resp
+  token="$(tailscale_access_token)"
+  payload="$(jq -n --arg tag "$TAILSCALE_TAG" --arg desc "$desc" \
+    '{capabilities:{devices:{create:{reusable:true,ephemeral:false,preauthorized:true,tags:[$tag]}}},description:$desc}')"
+  resp="$(curl -s -X POST "$TS_API_BASE/tailnet/-/keys" \
+    -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$payload")"
+  TS_KEY_ID="$(echo "$resp" | jq -r '.id // empty')"
+  TS_AUTH_KEY="$(echo "$resp" | jq -r '.key // empty')"
+  if [ -z "$TS_KEY_ID" ] || [ -z "$TS_AUTH_KEY" ]; then
+    die "Failed to mint Tailscale authkey (tag $TAILSCALE_TAG): $(echo "$resp" | jq -c '.' 2>/dev/null || echo "$resp")"
+  fi
+}
+
+# tailscale_revoke_key <key_id> — used on provisioning failure after a key
+# was minted but never handed to a device, and by destroy-server.sh isn't
+# needed for this (device deletion below invalidates the key's binding, but
+# the key row itself is harmless left alone — Tailscale authkeys aren't
+# billed/limited resources the way BinaryLane servers or Cloudflare tunnels
+# are). Kept narrow: only called when we know the key was never used.
+tailscale_revoke_key() {
+  local key_id="$1" token
+  token="$(tailscale_access_token)"
+  curl -s -o /dev/null -X DELETE "$TS_API_BASE/tailnet/-/keys/$key_id" -H "Authorization: Bearer $token"
+}
+
+# tailscale_delete_device_by_hostname <hostname> — used by destroy-server.sh.
+# Tailscale's own hostname (what the node reports, i.e. what --hostname was
+# set to at 'tailscale up' time), not the FQDN. No matching device is not an
+# error — the server may have failed before Tailscale set-up completed.
+tailscale_delete_device_by_hostname() {
+  local hostname="$1" token devices device_id
+  token="$(tailscale_access_token)"
+  devices="$(curl -s "$TS_API_BASE/tailnet/-/devices?fields=default" -H "Authorization: Bearer $token")"
+  device_id="$(echo "$devices" | jq -r --arg h "$hostname" '.devices[]? | select(.hostname == $h) | .id' | head -1)"
+  if [ -z "$device_id" ]; then
+    warn "No Tailscale device found with hostname '$hostname' — nothing to remove there."
+    return 0
+  fi
+  log "Removing Tailscale device '$hostname' (id $device_id)..."
+  local status
+  status="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$TS_API_BASE/device/$device_id" -H "Authorization: Bearer $token")"
+  [ "$status" -lt 300 ] && log "Tailscale device removed." || warn "Failed to remove Tailscale device $device_id (HTTP $status) — remove manually from the admin console."
 }
 
 # ---------------------------------------------------------------------------

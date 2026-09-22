@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ site_vhost_hostname }}</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; background: #0f172a; color: #e2e8f0;
+         display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .card { text-align: center; padding: 2.5rem 3rem; border-radius: 12px; background: #1e293b; }
+  h1 { margin: 0 0 0.5rem; font-size: 1.8rem; }
+  p { color: #94a3b8; margin: 0.25rem 0; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>&#x2705; Welcome to {{ site_vhost_hostname }}</h1>
+    <p>{{ site_vhost_welcome_subtitle }}</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,124 @@
+---
+# Issues a Let's Encrypt certificate for the container's internal FQDN via
+# DNS-01 (Cloudflare API) — not HTTP-01, since an internal-only FQDN is
+# never reachable by Let's Encrypt's public HTTP-01 validators. Ported
+# from provisioning/proxmox/scripts/install-https-dns01.sh.
+#
+# HIGH-RISK, ported exactly: certbot's --expand does NOT union with the
+# existing certificate's SANs on its own (confirmed directly: expanding a
+# cert with SANs {A,B} using only `-d A -d C` comes back with SANs {A,C} —
+# B silently dropped). This role explicitly computes the union of every
+# existing SAN plus every newly requested domain before calling certbot,
+# every time the cert needs expanding — skipping this step would silently
+# un-cover a previously-added hostname on every subsequent run.
+
+- name: Require an fqdn
+  ansible.builtin.assert:
+    that: certbot_dns01_fqdn | length > 0
+    fail_msg: certbot_dns01_fqdn is required.
+
+- name: Require a Cloudflare token
+  ansible.builtin.assert:
+    that: certbot_dns01_cf_token | length > 0
+    fail_msg: certbot_dns01_cf_token is required.
+  no_log: true
+
+- name: Check whether a certificate already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ certbot_dns01_fqdn }}/fullchain.pem"
+  become: true
+  register: certbot_dns01_existing_cert
+
+- name: Read the existing certificate's SANs
+  ansible.builtin.command: >
+    openssl x509 -in /etc/letsencrypt/live/{{ certbot_dns01_fqdn }}/fullchain.pem
+    -noout -ext subjectAltName
+  become: true
+  register: certbot_dns01_existing_sans_raw
+  changed_when: false
+  when: certbot_dns01_existing_cert.stat.exists
+
+- name: Compute the requested domain list and whether issuance is needed
+  ansible.builtin.set_fact:
+    certbot_dns01_requested_domains: "{{ [certbot_dns01_fqdn] + certbot_dns01_additional_domains }}"
+    certbot_dns01_existing_sans: >-
+      {{ (certbot_dns01_existing_sans_raw.stdout | default(''))
+         | regex_findall('DNS:([^,\s]+)') }}
+
+- name: Determine whether the existing cert already covers everything requested
+  ansible.builtin.set_fact:
+    certbot_dns01_need_issuance: >-
+      {{ not certbot_dns01_existing_cert.stat.exists
+         or (certbot_dns01_requested_domains | difference(certbot_dns01_existing_sans) | length > 0) }}
+
+- name: Compute the full domain list to request (union, FQDN first, deduplicated)
+  # Ansible's `unique` filter preserves first-occurrence order, matching
+  # the original's `awk '!seen[$0]++'`.
+  ansible.builtin.set_fact:
+    certbot_dns01_domain_args: "{{ (certbot_dns01_requested_domains + certbot_dns01_existing_sans) | unique }}"
+
+- name: Request and install the certificate
+  when: certbot_dns01_need_issuance
+  become: true
+  block:
+    - name: Install certbot and the Cloudflare DNS plugin
+      ansible.builtin.apt:
+        name:
+          - certbot
+          - python3-certbot-dns-cloudflare
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Ensure /etc/letsencrypt exists
+      ansible.builtin.file:
+        path: /etc/letsencrypt
+        state: directory
+        mode: '0700'
+
+    - name: Write the scoped Cloudflare credentials file for the certbot plugin
+      ansible.builtin.template:
+        src: cloudflare.ini.j2
+        dest: /etc/letsencrypt/cloudflare.ini
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Request the certificate (DNS-01, retried for transient DNS flakiness)
+      # Domain names are DNS labels (alphanumeric/hyphen/dot only), so a
+      # plain string command is safe here — no shell-metacharacter risk,
+      # unlike certbot_http01's email field.
+      ansible.builtin.command: >-
+        certbot certonly --dns-cloudflare
+        --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini
+        --dns-cloudflare-propagation-seconds 30
+        --cert-name {{ certbot_dns01_fqdn }} --expand
+        {{ certbot_dns01_domain_args | map('regex_replace', '^(.*)$', '-d \1') | join(' ') }}
+        --non-interactive --agree-tos
+        {{ ('-m ' + certbot_dns01_email + ' --no-eff-email') if certbot_dns01_email | length > 0
+           else '--register-unsafely-without-email' }}
+      register: certbot_dns01_result
+      until: certbot_dns01_result.rc == 0
+      retries: 3
+      delay: 15
+      changed_when: true
+      no_log: true
+
+- name: Report certificate status
+  ansible.builtin.command: certbot certificates --cert-name {{ certbot_dns01_fqdn }}
+  become: true
+  register: certbot_dns01_status
+  changed_when: false
+
+- name: Show certificate status
+  ansible.builtin.debug:
+    msg: "{{ certbot_dns01_status.stdout_lines | select('match', '.*(Certificate Name|Domains|Expiry Date).*') | list }}"
+
+- name: Ensure the certbot renewal timer is enabled
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started
+  become: true
+  failed_when: false

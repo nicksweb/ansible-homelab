@@ -1,0 +1,168 @@
+---
+# Installs Apache + phpMyAdmin (Ubuntu's own package, dbconfig-common
+# disabled — this is just the admin UI for the MySQL already on this box,
+# it never gets its own database) and locks web access down to specific
+# IPs via ufw. Ported from provisioning/binarylane/scripts/install-phpmyadmin.sh.
+# Login is as 'root' with the password from mysql_standalone's credentials
+# file — no extra MySQL grant needed for the admin GUI itself.
+
+- name: Require at least one allowed IP
+  ansible.builtin.set_fact:
+    phpmyadmin_ip_list: >-
+      {{ phpmyadmin_allowed_ips if phpmyadmin_allowed_ips is iterable and phpmyadmin_allowed_ips is not string
+         else phpmyadmin_allowed_ips.split(',') | map('trim') | list }}
+
+- name: Assert at least one allowed IP
+  ansible.builtin.assert:
+    that: phpmyadmin_ip_list | select | list | length > 0
+    fail_msg: phpmyadmin_allowed_ips must contain at least one IP/CIDR.
+
+- name: Check whether Apache is already installed
+  ansible.builtin.stat:
+    path: /usr/sbin/apache2
+  register: phpmyadmin_apache_present
+
+- name: Install Apache
+  when: not phpmyadmin_apache_present.stat.exists
+  become: true
+  block:
+    - name: apt update
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install apache2
+      ansible.builtin.apt:
+        name: apache2
+        state: present
+
+    - name: Disable the default site
+      ansible.builtin.command: a2dissite 000-default
+      changed_when: true
+      failed_when: false
+
+- name: Check whether phpMyAdmin is already installed
+  ansible.builtin.stat:
+    path: /usr/share/phpmyadmin
+  register: phpmyadmin_pkg_present
+
+- name: Install phpMyAdmin
+  when: not phpmyadmin_pkg_present.stat.exists
+  become: true
+  block:
+    - name: Pre-seed debconf to skip dbconfig-common and webserver reconfiguration
+      ansible.builtin.debconf:
+        name: phpmyadmin
+        question: "{{ item.question }}"
+        value: "{{ item.value }}"
+        vtype: "{{ item.vtype }}"
+      loop:
+        - { question: "phpmyadmin/dbconfig-install", value: "false", vtype: "boolean" }
+        - { question: "phpmyadmin/reconfigure-webserver", value: [], vtype: "multiselect" }
+
+    - name: Install phpmyadmin and required PHP extensions
+      ansible.builtin.apt:
+        name:
+          - phpmyadmin
+          - libapache2-mod-php
+          - php-mbstring
+          - php-zip
+          - php-curl
+        state: present
+
+- name: Enable the PHP Apache module
+  ansible.builtin.command: "{{ item }}"
+  loop:
+    - a2enmod php8.3
+    - a2enmod php
+  become: true
+  register: phpmyadmin_enmod
+  changed_when: "'already enabled' not in phpmyadmin_enmod.stdout"
+  failed_when: false
+
+- name: Check the existing phpMyAdmin config for a blowfish_secret
+  ansible.builtin.command: grep -q blowfish_secret /etc/phpmyadmin/config.inc.php
+  register: phpmyadmin_has_secret
+  changed_when: false
+  failed_when: false
+
+- name: Write phpMyAdmin config with a fresh blowfish_secret
+  # Preserve-on-rerun, same rationale as mysql_standalone's credentials —
+  # regenerating this on every run would invalidate every existing
+  # phpMyAdmin login cookie for no reason.
+  when: phpmyadmin_has_secret.rc != 0
+  become: true
+  block:
+    - name: Generate a blowfish_secret
+      ansible.builtin.command: openssl rand -hex 16
+      register: phpmyadmin_new_secret
+      changed_when: false
+      no_log: true
+
+    - name: Write /etc/phpmyadmin/config.inc.php
+      ansible.builtin.template:
+        src: config.inc.php.j2
+        dest: /etc/phpmyadmin/config.inc.php
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        phpmyadmin_blowfish_secret: "{{ phpmyadmin_new_secret.stdout }}"
+      no_log: true
+
+- name: Check for the packaged Apache conf snippet
+  ansible.builtin.stat:
+    path: /etc/phpmyadmin/apache.conf
+  register: phpmyadmin_apache_conf
+
+- name: Enable the phpMyAdmin Apache conf
+  when: phpmyadmin_apache_conf.stat.exists
+  become: true
+  block:
+    - name: Symlink into conf-available
+      ansible.builtin.file:
+        src: /etc/phpmyadmin/apache.conf
+        dest: /etc/apache2/conf-available/phpmyadmin.conf
+        state: link
+
+    - name: a2enconf phpmyadmin
+      ansible.builtin.command: a2enconf phpmyadmin
+      changed_when: true
+
+- name: Remove the from-anywhere ufw rules hardening left behind
+  # A db-only server wasn't expected to run a web GUI at provisioning
+  # time, so harden-ssh(_harden) allowed 80/443 from anywhere. Lock that
+  # down now that a web GUI exists — a from-anywhere-reachable DB admin
+  # GUI would defeat mysql_standalone's own IP-scoped 3306 restriction.
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: tcp
+    delete: true
+  loop:
+    - { port: '80' }
+    - { port: '443' }
+  become: true
+  failed_when: false
+
+- name: Allow HTTP/HTTPS from each allowed IP via ufw
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item.0 }}"
+    to_port: "{{ item.1 }}"
+    proto: tcp
+    comment: "phpmyadmin admin access"
+  loop: "{{ phpmyadmin_ip_list | select | list | product(['80', '443']) | list }}"
+  become: true
+
+- name: Validate the Apache config
+  ansible.builtin.command: apache2ctl configtest
+  become: true
+  changed_when: false
+
+- name: Enable and reload Apache
+  ansible.builtin.systemd:
+    name: apache2
+    enabled: true
+    state: reloaded
+  become: true

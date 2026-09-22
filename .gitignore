@@ -4,7 +4,9 @@ inventory.organized
 inventory.local
 nbc
 host_vars/
-group_vars/
+group_vars/*
+!group_vars/provisioning/
+!group_vars/provisioning/vault.yml
 
 # Local SSH/reference notes
 SSH_REFERENCE.local.md
@@ -15,6 +17,7 @@ SSH_REFERENCE.local.md
 *.retry
 *.vault
 vault*.yml
+!group_vars/provisioning/vault.yml
 *.key
 *.pem
 
