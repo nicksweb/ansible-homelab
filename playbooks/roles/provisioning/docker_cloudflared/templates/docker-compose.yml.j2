@@ -1,0 +1,16 @@
+services:
+  cloudflared:
+    image: {{ docker_cloudflared_image }}
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro
+    networks:
+      - {{ docker_cloudflared_network }}
+
+networks:
+  {{ docker_cloudflared_network }}:
+    external: true

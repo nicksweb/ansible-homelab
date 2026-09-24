@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Managed by Ansible (docker_port_allowlist role) — edits here are overwritten.
+# Full rebuild each run: removes every DOCKER-USER rule tagged
+# "{{ docker_port_allowlist_rule_name }}", then re-adds the allow-list and a
+# final DROP for that port on {{ docker_port_allowlist_effective_if }}.
+set -euo pipefail
+
+PORT={{ docker_port_allowlist_port | int }}
+RULE_NAME="{{ docker_port_allowlist_rule_name }}"
+IFACE="{{ docker_port_allowlist_effective_if }}"
+CIDRS_V4=({% for c in docker_port_allowlist_cidrs if ':' not in c %}"{{ c }}" {% endfor %})
+CIDRS_V6=({% for c in docker_port_allowlist_cidrs if ':' in c %}"{{ c }}" {% endfor %})
+
+# Inbound on the external interface, to the port the client actually asked
+# for (pre-DNAT). Container-originated traffic never matches.
+MATCH=(-i "$IFACE" -p tcp -m conntrack --ctdir ORIGINAL --ctorigdstport "$PORT")
+
+for TOOL in iptables ip6tables; do
+  # Delete by exact rule spec, from `-S` output — no line-number shifting.
+  # The comment may or may not be quoted depending on the iptables backend.
+  # `|| true`: no existing rules (first run) makes grep exit 1, which
+  # pipefail + set -e would otherwise turn into a silent abort.
+  { $TOOL -S DOCKER-USER | grep -E -- "--comment \"?${RULE_NAME}(-drop)?\"?( |\$)" || true; } | sed 's/^-A /-D /' | while read -r SPEC; do
+    eval "$TOOL $SPEC"
+  done
+done
+
+apply() {
+  local tool="$1"; shift
+  local cidr
+  for cidr in "$@"; do
+    $tool -I DOCKER-USER 1 "${MATCH[@]}" -s "$cidr" -m comment --comment "$RULE_NAME" -j ACCEPT
+  done
+  $tool -A DOCKER-USER "${MATCH[@]}" -m comment --comment "$RULE_NAME-drop" -j DROP
+}
+apply iptables "${CIDRS_V4[@]}"
+apply ip6tables "${CIDRS_V6[@]}"

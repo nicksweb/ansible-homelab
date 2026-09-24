@@ -38,6 +38,7 @@ warn() { log "WARN: $*"; }
 : "${CLOUDFLARE_ACCOUNT_ID:=}"  # your Cloudflare account id — non-secret, from the dashboard or `GET /accounts`
 : "${MANAGEMENT_SSH_HOSTNAME:=manage.example.com}"  # resolved fresh each run, explicitly allowed through ufw + fail2ban ignoreip on every provisioned server
 : "${LETSENCRYPT_EMAIL:=}"  # optional; empty uses certbot --register-unsafely-without-email
+: "${TRUSTED_443_IPS:=}"  # --role docker: IPs/CIDRs (comma-separated) always allowed to NPM's 443 alongside Cloudflare's ranges
 
 if [ -f "$TOOLKIT_ROOT/config.env" ]; then
   # shellcheck disable=SC1091

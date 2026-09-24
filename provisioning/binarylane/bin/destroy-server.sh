@@ -33,6 +33,11 @@ TUNNEL_ZONE_ID="$(state_read_field "$NAME" '.cloudflare.tunnel_zone_id // empty'
 # Older records (before tunnel_zone_id was tracked separately) assumed the
 # tunnel hostname shared the server's own zone — fall back to that for them.
 [ -z "$TUNNEL_ZONE_ID" ] && TUNNEL_ZONE_ID="$ZONE_ID"
+# Extra tunnel routes (--role docker: sites, NPM, add-tunnel-hostname.sh) —
+# every CNAME except the primary one, which is handled on its own below.
+EXTRA_ROUTES="$(jq -r --arg primary "$TUNNEL_RECORD_ID" \
+  '.cloudflare.tunnel_routes // [] | .[] | select(.dns_record_id != $primary) | "\(.zone_id)\t\(.dns_record_id)\t\(.hostname)"' \
+  "$(state_file "$NAME")")"
 TAILSCALE_ENABLED="$(state_read_field "$NAME" '.tailscale.enabled // false')"
 TAILSCALE_HOSTNAME="$(state_read_field "$NAME" '.tailscale.hostname // empty')"
 
@@ -65,6 +70,10 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   echo "  Tunnel ID:       ${TUNNEL_ID:-none recorded}"
   echo "  CNAME record id: ${TUNNEL_RECORD_ID:-none recorded}"
   echo "  The tunnel itself will be deleted via the Cloudflare API (it belongs only to this server)"
+  if [ -n "$EXTRA_ROUTES" ]; then
+    echo "  Extra tunnel hostnames (CNAMEs deleted too):"
+    echo "$EXTRA_ROUTES" | awk -F'\t' '{print "    " $3 " (record " $2 ")"}'
+  fi
 else
   echo "Cloudflare Tunnel: Not Configured"
 fi
@@ -101,6 +110,11 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
     log "Deleting Cloudflare Tunnel CNAME record $TUNNEL_RECORD_ID..."
     cf_api DELETE "/zones/${TUNNEL_ZONE_ID}/dns_records/${TUNNEL_RECORD_ID}" >/dev/null || warn "Failed to delete tunnel CNAME $TUNNEL_RECORD_ID — remove manually."
   fi
+  while IFS=$'\t' read -r R_ZONE R_ID R_HOST; do
+    [ -n "$R_ID" ] || continue
+    log "Deleting tunnel CNAME $R_HOST ($R_ID)..."
+    cf_api DELETE "/zones/${R_ZONE}/dns_records/${R_ID}" >/dev/null || warn "Failed to delete CNAME $R_HOST ($R_ID) — remove manually."
+  done <<< "$EXTRA_ROUTES"
   if [ -n "$TUNNEL_ID" ]; then
     log "Deleting dedicated Cloudflare Tunnel $TUNNEL_ID (the remote server it ran on is already gone)..."
     # Cloudflare rejects deletion with "active connections" for a short window

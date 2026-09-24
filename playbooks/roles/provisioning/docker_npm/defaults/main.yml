@@ -1,0 +1,9 @@
+---
+docker_npm_dir: "/home/{{ ansible_user }}/docker/npm"
+docker_npm_image: "jc21/nginx-proxy-manager:latest"
+
+# Only 443 is published, so there's exactly one port for
+# docker_port_allowlist to restrict. NPM's :81 admin UI and :80 proxy are
+# reached through the server's tunnel instead (http://npm:81, http://npm:80).
+docker_npm_published_ports:
+  - "443:443"

@@ -49,19 +49,14 @@
     name: OpenSSH
   become: true
 
-- name: Allow HTTP
+- name: Allow HTTP and HTTPS
   community.general.ufw:
     rule: allow
-    port: '80'
+    port: "{{ item }}"
     proto: tcp
   become: true
-
-- name: Allow HTTPS
-  community.general.ufw:
-    rule: allow
-    port: '443'
-    proto: tcp
-  become: true
+  loop: ['80', '443']
+  when: ssh_harden_open_web_ports | bool
 
 - name: Enable ufw
   community.general.ufw:

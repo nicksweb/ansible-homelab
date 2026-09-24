@@ -1,0 +1,21 @@
+services:
+  npm:
+    image: {{ docker_npm_image }}
+    container_name: npm
+    restart: unless-stopped
+    ports:
+{% for p in docker_npm_published_ports %}
+      - "{{ p }}"
+{% endfor %}
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+    networks:
+      - frontend
+      - backend
+
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

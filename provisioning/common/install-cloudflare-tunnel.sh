@@ -13,7 +13,11 @@
 # separate process (command substitution) and can't inherit the calling
 # toolkit's shell functions or unexported variables.
 #
-# Usage: install-cloudflare-tunnel.sh <name> <public_hostname> <target_ip> <ssh_user> <ssh_key>
+# Usage: install-cloudflare-tunnel.sh <name> <public_hostname> <target_ip> <ssh_user> <ssh_key> [connector]
+#   connector: "systemd" (default) — cloudflared as a host service routing to
+#              localhost:80 (cloudflared_connector role); or "docker" —
+#              cloudflared as a container routing to the `web` container
+#              (docker_cloudflared role), for BinaryLane --role docker servers.
 # Idempotent: re-running for the same <name> reuses the existing tunnel.
 set -euo pipefail
 
@@ -35,6 +39,8 @@ PUBLIC_HOSTNAME="${2:?}"
 TARGET_IP="${3:?}"
 SSH_USER="${4:?}"
 SSH_KEY="${5:?}"
+CONNECTOR="${6:-systemd}"
+case "$CONNECTOR" in systemd|docker) ;; *) die "connector must be 'systemd' or 'docker', got '$CONNECTOR'" ;; esac
 
 # Self-contained credential loading — deliberately not relying on either
 # toolkit's own differently-named loader (binarylane: load_cloudflare_creds;
@@ -63,11 +69,18 @@ log "Fetching connector token for tunnel $TUNNEL_ID"
 CONNECTOR_TOKEN="$(fetch_tunnel_token "$TUNNEL_ID")"
 
 log "Installing cloudflared on $TARGET_IP for hostname $PUBLIC_HOSTNAME via Ansible (token passed as a one-shot extra-vars file, never on disk beyond this run, never logged)"
-EXTRA_VARS="$(jq -n --arg tid "$TUNNEL_ID" --arg host "$PUBLIC_HOSTNAME" --arg token "$CONNECTOR_TOKEN" \
-  '{cloudflared_connector_tunnel_id:$tid, cloudflared_connector_hostname:$host, cloudflared_connector_token:$token}')"
+if [ "$CONNECTOR" = "docker" ]; then
+  CONNECTOR_PLAYBOOK="playbooks/provisioning/docker_cloudflared.yml"
+  EXTRA_VARS="$(jq -n --arg tid "$TUNNEL_ID" --arg host "$PUBLIC_HOSTNAME" --arg token "$CONNECTOR_TOKEN" \
+    '{docker_cloudflared_tunnel_id:$tid, docker_cloudflared_token:$token, docker_cloudflared_routes:[{hostname:$host, service:"http://web:80"}]}')"
+else
+  CONNECTOR_PLAYBOOK="playbooks/provisioning/cloudflared_connector.yml"
+  EXTRA_VARS="$(jq -n --arg tid "$TUNNEL_ID" --arg host "$PUBLIC_HOSTNAME" --arg token "$CONNECTOR_TOKEN" \
+    '{cloudflared_connector_tunnel_id:$tid, cloudflared_connector_hostname:$host, cloudflared_connector_token:$token}')"
+fi
 unset CONNECTOR_TOKEN
-ansible_run_playbook "playbooks/provisioning/cloudflared_connector.yml" "$TARGET_IP" "$SSH_USER" "$SSH_KEY" "$EXTRA_VARS" \
-  || die "cloudflared_connector Ansible role failed"
+ansible_run_playbook "$CONNECTOR_PLAYBOOK" "$TARGET_IP" "$SSH_USER" "$SSH_KEY" "$EXTRA_VARS" \
+  || die "$CONNECTOR_PLAYBOOK failed"
 unset EXTRA_VARS
 log "cloudflared installed and running."
 

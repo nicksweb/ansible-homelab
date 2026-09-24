@@ -1,0 +1,14 @@
+---
+# Entry point for the docker_port_allowlist role. Invoked by
+# provisioning/binarylane/bin/allow-cloudflare-ips.sh.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/docker_port_allowlist.yml \
+#     -e '{"docker_port_allowlist_rule_name": "npm-443", "docker_port_allowlist_port": 443,
+#          "docker_port_allowlist_cidrs": ["173.245.48.0/20", "203.0.113.7"]}'
+- name: Restrict a Docker-published port to an allow-list
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/docker_port_allowlist

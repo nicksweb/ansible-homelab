@@ -12,6 +12,11 @@ Ansible baseline to it as everything else in the inventory.
 | [`proxmox/`](proxmox/README.md) | Proxmox VE (LXC containers) | You have a Proxmox cluster/host and want free, fast, local capacity |
 | [`binarylane/`](binarylane/README.md) | [BinaryLane](https://binarylane.com.au) (cloud VMs) | You need a publicly-hosted VM outside your own network, or don't run Proxmox |
 
+BinaryLane servers come in two flavours: LAMP (default) or `--role docker`
+(static sites in nginx + Nginx Proxy Manager behind a dedicated tunnel, with
+NPM's direct 443 restricted to Cloudflare and trusted IPs) — see
+[binarylane/README.md](binarylane/README.md#docker-static-site-servers---role-docker).
+
 Both share the same design:
 
 - **Split-horizon-friendly**: an internal DNS identity for SSH/admin, an

@@ -1,0 +1,13 @@
+---
+# Converge the static sites on a docker-role server from the full list in
+# local state. Invoked by provisioning/binarylane/bin/add-static-site.sh.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/docker_web_sites.yml \
+#     -e '{"docker_web_static_sites": ["docs.example.com", "example.com"]}'
+- name: Static sites on the docker web container
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/docker_web_static

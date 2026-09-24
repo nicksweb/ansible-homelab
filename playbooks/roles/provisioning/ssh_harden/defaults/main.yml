@@ -3,3 +3,9 @@
 # allow rule for port 22, in addition to the general OpenSSH allow-from-
 # anywhere rule. Empty is valid — just skips that one extra rule.
 ssh_harden_management_ip: ""
+
+# Whether to open 80/443 in ufw. Docker-role servers pass false: nothing
+# listens on the host there, and the one published port (NPM's 443) is
+# filtered in the DOCKER-USER chain by docker_port_allowlist, which ufw
+# can't see anyway.
+ssh_harden_open_web_ports: true

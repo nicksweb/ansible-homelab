@@ -1,0 +1,4 @@
+---
+docker_mariadb_dir: "/home/{{ ansible_user }}/docker/mariadb"
+docker_mariadb_image: "mariadb:11"
+docker_mariadb_network: backend

@@ -58,7 +58,11 @@ INV
   # (wrong roles_path, no inventory=, no private_key_file=) — confirmed
   # directly: "role not found" on a real run despite working fine when
   # invoked manually from the repo root.
-  ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook "${args[@]}" || rc=$?
+  #
+  # Output goes to stderr: some callers run inside $(...) to capture their
+  # own KEY=value results from stdout, which would otherwise swallow the
+  # playbook's output — including the reason it failed.
+  ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook "${args[@]}" >&2 || rc=$?
 
   rm -f "$inv_file"
   [ -n "${vars_file:-}" ] && rm -f "$vars_file"

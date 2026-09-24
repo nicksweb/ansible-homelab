@@ -1,0 +1,16 @@
+---
+docker_cloudflared_dir: "/home/{{ ansible_user }}/docker/cloudflared"
+docker_cloudflared_image: "cloudflare/cloudflared:latest"
+docker_cloudflared_network: frontend
+
+docker_cloudflared_tunnel_id: ""
+
+# The tunnel's connector token. Only needed on first install (it's kept in
+# .env on the server after that) — later runs that only change ingress
+# leave it empty. Pass via an extra-vars file, never literal -e.
+docker_cloudflared_token: ""
+
+# Full desired ingress, in order — always the complete list, not a delta:
+#   - { hostname: web01-pilot.example.com, service: "http://web:80" }
+#   - { hostname: npm-admin.example.com,   service: "http://npm:81" }
+docker_cloudflared_routes: []

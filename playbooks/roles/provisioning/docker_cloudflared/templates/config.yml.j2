@@ -1,0 +1,7 @@
+tunnel: {{ docker_cloudflared_tunnel_id }}
+ingress:
+{% for r in docker_cloudflared_routes %}
+  - hostname: {{ r.hostname }}
+    service: {{ r.service }}
+{% endfor %}
+  - service: http_status:404

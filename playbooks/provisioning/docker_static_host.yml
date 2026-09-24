@@ -1,0 +1,22 @@
+---
+# Entry point for BinaryLane `--role docker` servers: Docker + internal
+# MariaDB + static nginx (+ optionally Nginx Proxy Manager). Invoked by
+# provisioning/binarylane/bin/provision-server.sh. cloudflared and the
+# port-443 allow-list are separate playbooks (docker_cloudflared.yml,
+# docker_port_allowlist.yml) because they need Cloudflare API output first.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/docker_static_host.yml \
+#     -e '{"docker_static_host_npm": true}'
+- name: Docker static-site host
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    docker_engine_networks: [frontend, backend]
+  roles:
+    - provisioning/docker_engine
+    - provisioning/docker_mariadb
+    - provisioning/docker_web_static
+    - role: provisioning/docker_npm
+      when: docker_static_host_npm | default(true) | bool

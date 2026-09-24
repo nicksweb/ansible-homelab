@@ -1,0 +1,17 @@
+---
+# Entry point for the docker_cloudflared role. Invoked by
+# provisioning/common/install-cloudflare-tunnel.sh (first install, with the
+# connector token) and by provisioning/binarylane/lib/docker.sh (ingress
+# changes, full route list from local state, no token).
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/docker_cloudflared.yml \
+#     --extra-vars @/path/to/one-shot-vars.json
+# where the vars file holds docker_cloudflared_tunnel_id, _routes, and
+# (first install only) _token.
+- name: cloudflared tunnel connector (Docker)
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/docker_cloudflared

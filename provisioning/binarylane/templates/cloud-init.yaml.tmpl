@@ -1,6 +1,10 @@
 #cloud-config
 # Rendered by bin/provision-server.sh via envsubst. No secrets belong in here —
-# only the provisioning SSH *public* key and non-secret identity fields.
+# only SSH *public* keys and non-secret identity fields.
+#
+# ${EXTRA_SSH_KEYS_YAML} is either empty or extra "      - <pubkey>" lines.
+# ${UFW_WEB_PORTS} is "80,443" (LAMP) or "" (--role docker: nothing listens
+# on the host; NPM's published 443 is filtered in DOCKER-USER instead).
 
 hostname: ${SHORT_NAME}
 fqdn: ${FQDN}
@@ -15,6 +19,7 @@ users:
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
     ssh_authorized_keys:
       - ${SSH_PUBLIC_KEY}
+${EXTRA_SSH_KEYS_YAML}
     lock_passwd: true
 
 package_update: true
@@ -47,8 +52,7 @@ write_files:
 runcmd:
   - timedatectl set-timezone ${TIMEZONE}
   - ufw allow OpenSSH
-  - ufw allow 80/tcp
-  - ufw allow 443/tcp
+  - [ bash, -c, "for p in $(echo '${UFW_WEB_PORTS}' | tr ',' ' '); do ufw allow $p/tcp; done" ]
   - ufw --force enable
   - systemctl enable --now fail2ban
   - systemctl enable --now unattended-upgrades

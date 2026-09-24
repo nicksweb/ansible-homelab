@@ -173,6 +173,53 @@ e.g. if you'll run `certbot --apache` yourself). The domain is validated
 against the live Cloudflare zone list first. Idempotent — re-running for the
 same hostname reuses the existing webroot/vhost/DNS record.
 
+## Docker static-site servers (`--role docker`)
+
+An alternative to LAMP for hosting static sites: Docker, with everything in
+containers on two shared networks (`frontend`, `backend`):
+
+| Container | Published? | Reached via |
+|---|---|---|
+| `web` (nginx, one server block per site) | no | the tunnel (`http://web:80`) |
+| `mariadb` (no database created yet) | no | other containers on `backend` |
+| `cloudflared` (this server's own tunnel) | no | — |
+| `npm` (Nginx Proxy Manager, skip with `--no-npm`) | **443 only** | tunnel for `:81` admin / `:80` proxy; direct 443 restricted |
+
+```bash
+./bin/provision-server.sh --name web01 --role docker --plan std-2vcpu \
+  --cloudflare-tunnel --cloudflare-hostname web01-pilot.example.com
+```
+
+- **ufw allows SSH only.** Nothing listens on the host itself.
+- **NPM's 443 is restricted in the `DOCKER-USER` iptables chain**, not ufw
+  (Docker's own rules for published ports run before ufw sees the traffic).
+  Allowed: Cloudflare's published ranges (fetched live) plus
+  `TRUSTED_443_IPS` from `config.env` and any `--trusted-ip`. The rules
+  match only inbound traffic on the external interface, so containers'
+  own outbound HTTPS (NPM → Let's Encrypt, image pulls) is unaffected. A
+  systemd unit (`npm-443-fw-rules`) re-applies them at boot.
+- **NPM's admin UI is on a public tunnel hostname** (default
+  `nginx-<name>.<domain>`). Log in and set the admin account immediately
+  after provisioning; consider a Cloudflare Access policy in front of it.
+
+Day-to-day:
+
+```bash
+./bin/add-static-site.sh web01 docs example.com         # webroot + nginx conf + tunnel route + CNAME
+./bin/deploy-site.sh web01 docs.example.com ./_site     # rsync a local build (--delete)
+./bin/add-tunnel-hostname.sh web01 app.example.com http://npm:80   # any container:port
+./bin/allow-cloudflare-ips.sh web01 --extra-ip 203.0.113.7         # refresh ranges / add a trusted IP
+```
+
+Every tunnel hostname is recorded in `state/<name>.json` under
+`.cloudflare.tunnel_routes`, and the whole cloudflared config is
+re-rendered from that list on each change (`docker_cloudflared` role), so
+it can't drift. `destroy-server.sh` deletes every CNAME in that list.
+
+The on-server work is Ansible (`playbooks/provisioning/docker_*.yml`,
+roles under `playbooks/roles/provisioning/docker_*`); these scripts do the
+BinaryLane/Cloudflare API calls and keep local state.
+
 ## Splitting DB and web servers
 
 For a two-tier setup — dedicated DB server plus one or more app servers:
@@ -269,8 +316,8 @@ Idempotent — a rebuild under the same name detects the existing certificate.
 ./bin/destroy-server.sh webserver01 --yes
 ```
 
-Shows exactly what will be deleted (server, A record, tunnel/CNAME if
-applicable) and requires typing the FQDN back to confirm. Re-fetches the
+Shows exactly what will be deleted (server, A record, tunnel and every
+tunnel CNAME recorded in state, Tailscale device if applicable) and requires typing the FQDN back to confirm. Re-fetches the
 server by ID from BinaryLane and checks its name still matches local state
 before deleting. The provisioning record is updated in place with a
 `DESTROYED` block rather than removed.

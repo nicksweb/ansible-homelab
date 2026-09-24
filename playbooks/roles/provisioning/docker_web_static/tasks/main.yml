@@ -1,0 +1,78 @@
+---
+# One nginx container doing host-header dispatch across every site's
+# conf.d entry. No host ports published — cloudflared and NPM reach it by
+# name on the shared `frontend` network. Ported from server-provisioning's
+# scripts/install-web-static-remote.sh + scripts/add-static-site-remote.sh.
+#
+# Directories are owned by the admin user, not root: bin/deploy-site.sh
+# rsyncs builds into sites/<fqdn>/ as that user.
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - "{{ docker_web_static_dir }}"
+    - "{{ docker_web_static_dir }}/conf.d"
+    - "{{ docker_web_static_dir }}/sites"
+
+- name: Write the catch-all default server (404 for unknown hosts)
+  ansible.builtin.copy:
+    dest: "{{ docker_web_static_dir }}/conf.d/000-default.conf"
+    content: |
+      server {
+          listen 80 default_server;
+          server_name _;
+          return 404;
+      }
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  notify: "reload web nginx"
+
+- name: Create each site's webroot
+  ansible.builtin.file:
+    path: "{{ docker_web_static_dir }}/sites/{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop: "{{ docker_web_static_sites }}"
+
+- name: Write a placeholder index.html for new sites only
+  ansible.builtin.template:
+    src: placeholder-index.html.j2
+    dest: "{{ docker_web_static_dir }}/sites/{{ item }}/index.html"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+    force: false
+  loop: "{{ docker_web_static_sites }}"
+
+- name: Write each site's nginx server block
+  ansible.builtin.template:
+    src: site.conf.j2
+    dest: "{{ docker_web_static_dir }}/conf.d/{{ item }}.conf"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+  loop: "{{ docker_web_static_sites }}"
+  notify: "reload web nginx"
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ docker_web_static_dir }}/docker-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Start the web container
+  community.docker.docker_compose_v2:
+    project_src: "{{ docker_web_static_dir }}"
+    state: present
+    wait: true
+    wait_timeout: 60

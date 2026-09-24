@@ -12,11 +12,11 @@
 # script uses it, and this role keeps that choice rather than reintroducing
 # the lag by switching to the Galaxy role's default method.
 #
-# Requires the container to have been created with Proxmox's `nesting=1`
-# LXC feature. Verifies this for real with `docker run hello-world` rather
-# than assuming the feature flag alone is sufficient — preserve this
-# functional smoke test, don't simplify it down to a package-presence or
-# service-active check.
+# Used for both Proxmox LXC containers and BinaryLane VMs. On LXC it
+# requires the container to have been created with Proxmox's `nesting=1`
+# feature — verified for real with `docker run hello-world` rather than
+# assuming the feature flag alone is sufficient. Preserve this functional
+# smoke test; don't simplify it down to a package-presence check.
 
 - name: Check whether Docker is already installed
   ansible.builtin.command: docker --version
@@ -51,7 +51,7 @@
 - name: Reset the SSH connection to pick up the new docker group membership
   ansible.builtin.meta: reset_connection
 
-- name: Verify Docker actually works inside this LXC container (nesting=1)
+- name: Verify Docker actually runs a container
   ansible.builtin.command: docker run --rm hello-world
   become: true
   register: docker_engine_hello_world
@@ -69,3 +69,16 @@
     msg:
       - "{{ docker_engine_hello_world.stdout_lines[0] }}"
       - "{{ docker_engine_compose_version.stdout }}"
+
+- name: List existing Docker networks
+  ansible.builtin.command: docker network ls --format '{{ '{{' }}.Name{{ '}}' }}'
+  become: true
+  register: docker_engine_existing_networks
+  changed_when: false
+  when: docker_engine_networks | length > 0
+
+- name: Create shared external Docker networks
+  ansible.builtin.command: docker network create {{ item }}
+  become: true
+  loop: "{{ docker_engine_networks }}"
+  when: item not in docker_engine_existing_networks.stdout_lines
