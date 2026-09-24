@@ -12,6 +12,7 @@
 # template tasks, full control over the exact package list and config.
 
 - name: Determine the welcome-page FQDN
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: hostname -f
   register: lamp_stack_hostname_fqdn
   changed_when: false
@@ -96,6 +97,7 @@
   become: true
 
 - name: Detect the installed PHP version
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;'
   register: lamp_stack_php_version
   changed_when: false

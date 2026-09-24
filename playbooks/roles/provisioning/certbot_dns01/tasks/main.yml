@@ -30,6 +30,7 @@
   register: certbot_dns01_existing_cert
 
 - name: Read the existing certificate's SANs
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: >
     openssl x509 -in /etc/letsencrypt/live/{{ certbot_dns01_fqdn }}/fullchain.pem
     -noout -ext subjectAltName

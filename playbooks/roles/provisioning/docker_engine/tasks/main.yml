@@ -19,6 +19,7 @@
 # smoke test; don't simplify it down to a package-presence check.
 
 - name: Check whether Docker is already installed
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: docker --version
   register: docker_engine_existing
   changed_when: false
@@ -59,18 +60,21 @@
   failed_when: "'Hello from Docker' not in docker_engine_hello_world.stdout"
 
 - name: Report Docker Compose version
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: docker compose version
   become: true
   register: docker_engine_compose_version
   changed_when: false
 
 - name: Show versions
+  when: not ansible_check_mode
   ansible.builtin.debug:
     msg:
       - "{{ docker_engine_hello_world.stdout_lines[0] }}"
       - "{{ docker_engine_compose_version.stdout }}"
 
 - name: List existing Docker networks
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: docker network ls --format '{{ '{{' }}.Name{{ '}}' }}'
   become: true
   register: docker_engine_existing_networks

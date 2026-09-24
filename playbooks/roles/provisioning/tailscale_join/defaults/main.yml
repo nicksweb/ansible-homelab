@@ -10,3 +10,9 @@ tailscale_join_hostname: "{{ inventory_hostname }}"
 # gets deleted right after isn't). Every task that touches this value in
 # this role is no_log: true.
 tailscale_join_authkey: ""
+
+# Use MagicDNS. With systemd-resolved this only routes the tailnet's own
+# domain (*.<tailnet>.ts.net) to 100.100.100.100; every other lookup keeps
+# using the host's normal resolvers. BinaryLane servers turn it on so the
+# Beszel agent can reach the hub by its tailnet name.
+tailscale_join_accept_dns: false

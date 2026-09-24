@@ -70,7 +70,7 @@
     --authkey=file:{{ tailscale_join_keyfile.path }}
     --hostname={{ tailscale_join_hostname }}
     --ssh
-    --accept-dns=false
+    --accept-dns={{ tailscale_join_accept_dns | bool | lower }}
   become: true
   no_log: true
   changed_when: true

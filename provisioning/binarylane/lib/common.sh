@@ -38,6 +38,9 @@ warn() { log "WARN: $*"; }
 : "${CLOUDFLARE_ACCOUNT_ID:=}"  # your Cloudflare account id — non-secret, from the dashboard or `GET /accounts`
 : "${MANAGEMENT_SSH_HOSTNAME:=manage.example.com}"  # resolved fresh each run, explicitly allowed through ufw + fail2ban ignoreip on every provisioned server
 : "${LETSENCRYPT_EMAIL:=}"  # optional; empty uses certbot --register-unsafely-without-email
+: "${BESZEL_HUB_URL:=}"   # Beszel hub as reached over the tailnet, e.g. http://beszel.<tailnet>.ts.net:8090 — the public hostname sits behind Cloudflare Access, which the agent can't pass
+: "${BESZEL_HUB_KEY:=}"   # the hub's own SSH public key (not secret) — Settings > Add System on the hub
+: "${BESZEL_PORT:=45876}"
 : "${TRUSTED_443_IPS:=}"  # --role docker: IPs/CIDRs (comma-separated) always allowed to NPM's 443 alongside Cloudflare's ranges
 
 if [ -f "$TOOLKIT_ROOT/config.env" ]; then
@@ -81,6 +84,12 @@ load_cloudflare_creds() {
   [ -n "$CF_API_TOKEN" ] || die "Could not parse a Cloudflare API token from $API_AUTH_FILE or $CLOUDFLARE_CREDENTIAL_FILE"
   CF_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"
   export CF_API_TOKEN CF_ACCOUNT_ID
+}
+
+load_beszel_creds() {
+  [ -f "$API_AUTH_FILE" ] || die "Beszel token not found — expected $API_AUTH_FILE"
+  BESZEL_TOKEN="$(sed -n 's/^BESZEL_UNIVERSAL_CODE=//p' "$API_AUTH_FILE" | head -n1)"
+  [ -n "$BESZEL_TOKEN" ] || die "Could not parse BESZEL_UNIVERSAL_CODE from $API_AUTH_FILE"
 }
 
 load_tailscale_creds() {

@@ -46,6 +46,16 @@ find_free_reservation_ip() {
   return 1
 }
 
+# udm_network_gateway_prefix <network_id> — echoes "<gateway> <prefix>"
+# from the network's ip_subnet (e.g. "172.16.1.254/23" -> "172.16.1.254 23";
+# UniFi stores the gateway address, not the network address, there).
+udm_network_gateway_prefix() {
+  local network_id="$1" subnet
+  subnet="$(udm_api GET "/proxy/network/api/s/${UDM_SITE}/rest/networkconf" | jq -r --arg id "$network_id" '.data[] | select(._id == $id) | .ip_subnet // empty')"
+  [ -n "$subnet" ] || return 1
+  echo "${subnet%/*} ${subnet#*/}"
+}
+
 # create_dhcp_reservation_and_dns <mac> <ip> <fqdn> <network_id> — creates a
 # fixed-IP reservation with a local DNS record in one client object. Echoes
 # the new object's _id (needed for later deletion).

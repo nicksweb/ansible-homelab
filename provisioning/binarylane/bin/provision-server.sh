@@ -25,6 +25,8 @@
 #                                  none — registers with --register-unsafely-without-email)
 #   --skip-tailscale               Don't join the server to the tailnet (default: joined,
 #                                  tagged $TAILSCALE_TAG, reachable via Tailscale SSH)
+#   --skip-beszel                  Don't install the Beszel monitoring agent (default: installed
+#                                  when BESZEL_HUB_URL is set; reaches the hub over the tailnet)
 #   --skip-lamp                   Skip LAMP install
 #   --skip-mysql                  Install Apache/PHP but skip local MySQL (this server
 #                                  expects to connect to a separate --db-only server instead)
@@ -66,7 +68,7 @@ case "${CLOUDFLARE_PROXY:-false}" in
   *) CF_PROXY="off" ;;
 esac
 SKIP_LAMP=false SKIP_HARDEN=false DRY_RUN=false ASSUME_YES=false
-SKIP_TAILSCALE=false
+SKIP_TAILSCALE=false SKIP_BESZEL=false
 SKIP_MYSQL=false DB_ONLY=false DB_ALLOW_FROM=""
 DOCKER_ROLE=false DOCKER_NPM=true NPM_ADMIN_HOSTNAME="" NPM_PROXY_HOSTNAME="" TRUSTED_IPS_ARG="" EXTRA_SSH_KEY=""
 ENABLE_TLS=false LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
@@ -85,6 +87,7 @@ while [ $# -gt 0 ]; do
     --enable-tls) ENABLE_TLS=true; shift ;;
     --letsencrypt-email) LETSENCRYPT_EMAIL="$2"; shift 2 ;;
     --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
+    --skip-beszel) SKIP_BESZEL=true; shift ;;
     --skip-lamp) SKIP_LAMP=true; shift ;;
     --skip-mysql) SKIP_MYSQL=true; shift ;;
     --db-only) DB_ONLY=true; shift ;;
@@ -134,6 +137,14 @@ if $DOCKER_ROLE; then
 elif $DOCKER_NPM && [ -n "$NPM_ADMIN_HOSTNAME$NPM_PROXY_HOSTNAME$TRUSTED_IPS_ARG" ]; then
   die "--npm-admin-hostname/--npm-proxy-hostname/--trusted-ip only apply with --role docker"
 fi
+if ! $SKIP_BESZEL; then
+  if [ -z "$BESZEL_HUB_URL" ] || [ -z "$BESZEL_HUB_KEY" ]; then
+    warn "BESZEL_HUB_URL/BESZEL_HUB_KEY not set in config.env — skipping the Beszel agent"
+    SKIP_BESZEL=true
+  elif $SKIP_TAILSCALE && [[ "$BESZEL_HUB_URL" == *.ts.net* ]]; then
+    die "BESZEL_HUB_URL ($BESZEL_HUB_URL) is a tailnet address, which needs Tailscale — drop --skip-tailscale, or add --skip-beszel"
+  fi
+fi
 TRUSTED_443="$(printf '%s,%s' "${TRUSTED_443_IPS:-}" "$TRUSTED_IPS_ARG" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | awk 'NF && !seen[$0]++' | paste -sd, -)"
 
 EXTRA_SSH_KEYS_YAML=""
@@ -168,6 +179,7 @@ fi
 
 load_cloudflare_creds
 $SKIP_TAILSCALE || load_tailscale_creds
+$SKIP_BESZEL || load_beszel_creds
 if [ -n "$DOMAIN" ]; then
   log "Resolving Cloudflare zone ID for custom domain '$DOMAIN'..."
   CLOUDFLARE_ZONE_ID="$(resolve_zone_id_for_domain "$DOMAIN")" || exit 1
@@ -275,7 +287,8 @@ Cloudflare Tunnel:   $( $CF_TUNNEL && echo "ENABLED — dedicated per-server tun
 $( $CF_TUNNEL && echo "  Public hostname: $CF_HOSTNAME (proxied CNAME once the tunnel is created)" )
 $( $CF_TUNNEL && echo "  cloudflared will be installed on the new server itself, with only its own connector token" )
 
-Tailscale:            $( $SKIP_TAILSCALE && echo "Disabled" || echo "ENABLED — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH on (installed before hardening, as a fallback access path)" )
+Tailscale:            $( $SKIP_TAILSCALE && echo "Disabled" || echo "ENABLED — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH + MagicDNS on (installed before hardening, as a fallback access path)" )
+Beszel Monitoring:    $( $SKIP_BESZEL && echo "Skipped" || echo "Enabled -> $BESZEL_HUB_URL" )
 LAMP install:        $LAMP_LINE
 Hardening:            $( $SKIP_HARDEN && echo "Skipped" || echo "Key-only SSH, root login disabled, ufw, fail2ban, unattended-upgrades" )$( $DOCKER_ROLE && echo " (ufw: SSH only)" )
 $( $DOCKER_ROLE && $DOCKER_NPM && printf '%s\n' "NPM admin (tunnel):   $NPM_ADMIN_HOSTNAME -> http://npm:81" "NPM proxy (tunnel):   $NPM_PROXY_HOSTNAME -> http://npm:80" "NPM direct 443:       Cloudflare ranges + trusted: ${TRUSTED_443:-<none>}" )
@@ -443,7 +456,7 @@ if ! $SKIP_TAILSCALE; then
   TS_KEY_ID_USED="$TS_KEY_ID"
   TS_HOSTNAME="$NAME"
   log "Installing Tailscale and joining the tailnet as '$TS_HOSTNAME' via Ansible..."
-  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key}')"
+  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key, tailscale_join_accept_dns:true}')"
   unset TS_AUTH_KEY
   if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
     TAILSCALE_OK=true
@@ -454,6 +467,30 @@ if ! $SKIP_TAILSCALE; then
   fi
   unset TAILSCALE_VARS
 fi
+
+# ---------------------------------------------------------------------------
+# Beszel monitoring agent (default on when configured). The agent dials out
+# to the hub over a WebSocket, so nothing opens inbound here. It goes via
+# the tailnet: the hub's public hostname is behind Cloudflare Access.
+# ---------------------------------------------------------------------------
+BESZEL_OK=false
+if ! $SKIP_BESZEL; then
+  if ! $TAILSCALE_OK && [[ "$BESZEL_HUB_URL" == *.ts.net* ]]; then
+    warn "Tailscale didn't join, so the tailnet hub $BESZEL_HUB_URL is unreachable — skipping the Beszel agent"
+  else
+    log "Installing Beszel agent via Ansible (hub: $BESZEL_HUB_URL)..."
+    BESZEL_VARS="$(jq -n --arg url "$BESZEL_HUB_URL" --arg key "$BESZEL_HUB_KEY" --argjson port "$BESZEL_PORT" --arg token "$BESZEL_TOKEN" \
+      '{beszel_agent_hub_url:$url, beszel_agent_hub_key:$key, beszel_agent_port:$port, beszel_agent_token:$token}')"
+    if ansible_run_playbook "playbooks/provisioning/beszel_agent.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$BESZEL_VARS"; then
+      BESZEL_OK=true
+      log "Beszel agent connected."
+    else
+      warn "Beszel agent install/connection failed — not fatal. Check 'journalctl -u beszel-agent' on the server."
+    fi
+    unset BESZEL_VARS
+  fi
+fi
+unset BESZEL_TOKEN
 
 # ---------------------------------------------------------------------------
 # Harden — staged in two steps, each externally verified before the next
@@ -679,12 +716,14 @@ state_write "$NAME" "$(jq -n --argjson existing "$EXISTING_STATE" \
   --argjson tunnel_enabled "$CF_TUNNEL" --arg tunnel_hostname "$CF_HOSTNAME" --arg tunnel_record_id "$TUNNEL_RECORD_ID" \
   --arg tunnel_id "$DEDICATED_TUNNEL_ID" --arg tunnel_zone_id "$TUNNEL_ZONE_ID" \
   --arg role "$ROLE" --argjson db_only "$DB_ONLY" --arg db_allow_from "$DB_ALLOW_FROM" \
+  --argjson beszel_enabled "$BESZEL_OK" --arg beszel_hub "$BESZEL_HUB_URL" \
   --argjson tailscale_enabled "$TAILSCALE_OK" --arg tailscale_hostname "$TS_HOSTNAME" --arg tailscale_tag "$TAILSCALE_TAG" --arg tailscale_key_id "$TS_KEY_ID_USED" \
   '{name:$name, fqdn:$fqdn, binarylane_server_id:$server_id, region:$region, plan:$plan, image_id:$image_id,
     created_at:$created, updated_at:$updated, status:$status, public_ipv4:$ip, ssh_key_fingerprint:$fingerprint,
     role:$role,
     cloudflare:{zone_id:$zone_id, dns_record_id:$a_record_id, tunnel_enabled:$tunnel_enabled, tunnel_hostname:$tunnel_hostname, tunnel_dns_record_id:$tunnel_record_id, tunnel_id:$tunnel_id, tunnel_zone_id:$tunnel_zone_id},
     mysql:{db_only:$db_only, allowed_from:$db_allow_from, credentials_file:(if $db_only then "/etc/mysql-provisioning-credentials.env" else null end)},
+    beszel:{enabled:$beszel_enabled, hub_url:(if $beszel_enabled then $beszel_hub else "" end)},
     tailscale:{enabled:$tailscale_enabled, hostname:$tailscale_hostname, tag:$tailscale_tag, authkey_id:$tailscale_key_id}}
    | $existing * .')"
 
@@ -746,6 +785,7 @@ RECORD="$(record_file "$NAME")"
   echo "============================================================"
   echo
   echo "Tailscale:"; echo "$( $TAILSCALE_OK && echo "Joined — hostname '$TS_HOSTNAME', tag $TAILSCALE_TAG, Tailscale SSH on" || echo "Not joined" )"; echo
+  echo "Beszel Monitoring:"; echo "$( $BESZEL_OK && echo "Agent connected to $BESZEL_HUB_URL (port $BESZEL_PORT)" || echo "Not installed" )"; echo
   echo
   echo "============================================================"
   echo "TLS (base FQDN — the tunnel hostname, if any, uses Cloudflare's edge TLS instead)"
@@ -807,6 +847,7 @@ Image:                    $IMAGE_FULLNAME
 Cloudflare DNS Record:   $A_RECORD_ID ($( [ "$CF_PROXY" = "on" ] && echo Proxied || echo "DNS Only" ))
 Cloudflare Tunnel:        $( $CF_TUNNEL && echo "Enabled ($CF_HOSTNAME)" || echo Disabled )
 Tailscale:                $( $TAILSCALE_OK && echo "Joined ($TS_HOSTNAME, $TAILSCALE_TAG)" || echo "Not joined" )
+Beszel:                   $( $BESZEL_OK && echo "Connected ($BESZEL_HUB_URL)" || echo "Not installed" )
 Let's Encrypt:            $( $TLS_OK && echo "https://$FQDN/" || echo "Not enabled" )
 $( $DOCKER_ROLE && $DOCKER_NPM && printf '%s\n' "NPM admin:                https://$NPM_ADMIN_HOSTNAME/ ($NPM_ADMIN_HTTPS) — set the admin login now" "NPM direct 443:           $( $FIREWALL_OK && echo "restricted (Cloudflare + ${TRUSTED_443:-no extra IPs})" || echo "NOT RESTRICTED" )" )
 SSH Command:              ssh -i $PROVISIONING_SSH_KEY $ADMIN_USER@$FQDN

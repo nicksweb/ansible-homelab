@@ -22,6 +22,7 @@
     fail_msg: mariadb_stack_fqdn is required.
 
 - name: Resolve the connecting user's HOME
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: sh -c 'echo $HOME'
   register: mariadb_stack_home
   changed_when: false
@@ -31,12 +32,22 @@
   ansible.builtin.set_fact:
     mariadb_stack_effective_dir: "{{ mariadb_stack_dir if mariadb_stack_dir | length > 0 else mariadb_stack_home.stdout + '/docker/mariadb-stack' }}"
 
-- name: Create the stack directory
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ mariadb_stack_effective_dir }}"
+    - "{{ mariadb_stack_effective_dir }}/data"
+
+- name: Create the MariaDB data directory
+  # No mode, no recurse: the MariaDB container owns these files (uid 999,
+  # 660). A recursive chmod here rewrote every data file to 0755 on
+  # re-runs against a live server.
   ansible.builtin.file:
     path: "{{ mariadb_stack_effective_dir }}/data/mariadb"
     state: directory
-    mode: '0755'
-    recurse: true
 
 - name: Check for an existing .env
   ansible.builtin.stat:
@@ -64,11 +75,13 @@
   no_log: true
   block:
     - name: Generate the root password
+      check_mode: false  # read-only probe; later tasks need its output in --check too
       ansible.builtin.command: "sh -c \"openssl rand -base64 24 | tr -dc 'A-Za-z0-9'\""
       register: mariadb_stack_new_root_pw
       changed_when: false
 
     - name: Generate the app password
+      check_mode: false  # read-only probe; later tasks need its output in --check too
       ansible.builtin.command: "sh -c \"openssl rand -base64 24 | tr -dc 'A-Za-z0-9'\""
       register: mariadb_stack_new_app_pw
       changed_when: false
@@ -214,6 +227,7 @@
   register: mariadb_stack_compose_result
 
 - name: Wait for MariaDB to report healthy
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: >
     docker inspect --format "{{ '{{' }}.State.Health.Status{{ '}}' }}"
     mariadb-stack-mariadb-1
@@ -231,6 +245,7 @@
   when: mariadb_stack_health.stdout != "healthy"
 
 - name: Report stack status
+  check_mode: false  # read-only probe; later tasks need its output in --check too
   ansible.builtin.command: docker compose ps
   args:
     chdir: "{{ mariadb_stack_effective_dir }}"

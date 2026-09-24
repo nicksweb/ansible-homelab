@@ -186,6 +186,8 @@ MAC_ADDR="$(printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256))
 RESERVED_IP="$(find_free_reservation_ip "$UDM_RESERVATION_RANGE_START" "$UDM_RESERVATION_RANGE_END")" \
   || die "No free IP in the reservation range $UDM_RESERVATION_RANGE_START-$UDM_RESERVATION_RANGE_END"
 log "Reserved IP: $RESERVED_IP"
+read -r NET_GATEWAY NET_PREFIX <<< "$(udm_network_gateway_prefix "$UDM_NETWORK_ID")"
+[ -n "$NET_GATEWAY" ] && [ -n "$NET_PREFIX" ] || die "Could not read the gateway/prefix for UDM network $UDM_NETWORK_ID"
 
 # ---------------------------------------------------------------------------
 # SSH key
@@ -207,7 +209,8 @@ Template:             ${PVE_TEMPLATE_STORAGE}:vztmpl/${PVE_TEMPLATE}
 CPU:                  ${CORES} vCPU
 RAM:                  ${MEMORY} MB
 Disk:                 ${DISK} GB (storage: $PVE_STORAGE)
-Network:              bridge=$PVE_BRIDGE, vlan=${VLAN_TAG:-none (native/VLAN1)}, DHCP reservation via UDM Pro -> $RESERVED_IP
+Network:              bridge=$PVE_BRIDGE, vlan=${VLAN_TAG:-none (native/VLAN1)}, static $RESERVED_IP/$NET_PREFIX gw $NET_GATEWAY (also reserved on the UDM)
+DNS server:           $NET_GATEWAY (UDM — resolves internal split-horizon names)
 Internal DNS:          $FQDN -> $RESERVED_IP (local DNS record, created on the UDM before the container so it resolves from first boot)
 MAC Address:          $MAC_ADDR
 Type:                 Unprivileged LXC, start at boot
@@ -233,8 +236,8 @@ if ! $ASSUME_YES; then
 fi
 
 # ---------------------------------------------------------------------------
-# UDM Pro reservation + DNS record — created first, so the container gets
-# the right IP and resolves correctly from its very first DHCP request.
+# UDM Pro reservation + DNS record — created first, so the name resolves
+# from first boot and the IP is marked as taken on the UDM.
 # ---------------------------------------------------------------------------
 log "Creating UDM Pro DHCP reservation + local DNS record: $FQDN -> $RESERVED_IP..."
 UDM_OBJECT_ID="$(create_dhcp_reservation_and_dns "$MAC_ADDR" "$RESERVED_IP" "$FQDN" "$UDM_NETWORK_ID")"
@@ -245,7 +248,12 @@ log "UDM reservation created (id: $UDM_OBJECT_ID)"
 # Create + start
 # ---------------------------------------------------------------------------
 log "Creating LXC $VMID ($HOSTNAME_ARG) on $TARGET_NODE..."
-NET0="name=eth0,bridge=${PVE_BRIDGE},ip=dhcp,hwaddr=${MAC_ADDR},type=veth"
+# Static, not DHCP: the UDM doesn't always apply a brand-new reservation to
+# the container's first DHCP request, and the old fix (reboot via the API to
+# force a new lease) left the container's network dead and its config lock
+# stuck (host006, 2026-09-24). The reservation range sits outside the DHCP
+# pool, so a static address there can't collide.
+NET0="name=eth0,bridge=${PVE_BRIDGE},ip=${RESERVED_IP}/${NET_PREFIX},gw=${NET_GATEWAY},hwaddr=${MAC_ADDR},type=veth"
 [ -n "$VLAN_TAG" ] && NET0="${NET0},tag=${VLAN_TAG}"
 
 TASK_ID="$(pve_api POST "/nodes/$TARGET_NODE/lxc" \
@@ -256,6 +264,8 @@ TASK_ID="$(pve_api POST "/nodes/$TARGET_NODE/lxc" \
   "memory=${MEMORY}" \
   "rootfs=${PVE_STORAGE}:${DISK}" \
   "net0=${NET0}" \
+  "nameserver=${NET_GATEWAY}" \
+  "searchdomain=${INTERNAL_DOMAIN}" \
   "unprivileged=1" \
   "onboot=1" \
   "start=1" \
@@ -292,42 +302,17 @@ done
 log "Container running."
 
 # ---------------------------------------------------------------------------
-# Wait for a DHCP-assigned IP, discovered via Proxmox's own interface report
+# Wait for the (static) address to come up
 # ---------------------------------------------------------------------------
-log "Waiting for a DHCP lease..."
-CONTAINER_IP=""
-for i in $(seq 1 20); do
-  CONTAINER_IP="$(pve_api GET "/nodes/$TARGET_NODE/lxc/$VMID/interfaces" 2>/dev/null | jq -r '.data[] | select(.name=="eth0") | .inet // empty' | cut -d/ -f1)"
-  [ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ] && break
+CONTAINER_IP="$RESERVED_IP"
+log "Waiting for $CONTAINER_IP to answer..."
+NET_UP=false
+for i in $(seq 1 24); do
+  ping -c1 -W2 "$CONTAINER_IP" >/dev/null 2>&1 && { NET_UP=true; break; }
   sleep 5
 done
-[ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ] || die "Container did not get a DHCP address in time. VMID=$VMID node=$TARGET_NODE — check the UDM Pro's DHCP scope for VLAN $VLAN_TAG."
+$NET_UP || die "Container isn't answering on $CONTAINER_IP after 2 minutes. VMID=$VMID node=$TARGET_NODE — check its network in the Proxmox console."
 log "Container IP: $CONTAINER_IP"
-
-# The UDM's reservation doesn't always take effect on the container's very
-# first DHCP request — confirmed via testing: the container got a pool IP
-# initially, and only picked up the reserved IP after a lease renewal
-# several minutes later (mid-bootstrap, breaking a script that assumed the
-# first IP was final). Rather than race that, force a fresh DHCP request via
-# reboot once, and re-check — much more reliable than hoping a later
-# passive renewal happens before we need the IP to be stable.
-if [ "$CONTAINER_IP" != "$RESERVED_IP" ]; then
-  warn "Container got $CONTAINER_IP but the UDM reservation was for $RESERVED_IP — reservation may not have propagated to the DHCP server yet. Rebooting to force a fresh DHCP request..."
-  sleep 20
-  pve_api POST "/nodes/$TARGET_NODE/lxc/$VMID/status/reboot" >/dev/null || warn "Reboot request failed — continuing with $CONTAINER_IP"
-  sleep 15
-  for i in $(seq 1 20); do
-    NEW_IP="$(pve_api GET "/nodes/$TARGET_NODE/lxc/$VMID/interfaces" 2>/dev/null | jq -r '.data[] | select(.name=="eth0") | .inet // empty' | cut -d/ -f1)"
-    [ -n "$NEW_IP" ] && [ "$NEW_IP" != "null" ] && [ "$NEW_IP" = "$RESERVED_IP" ] && { CONTAINER_IP="$NEW_IP"; break; }
-    sleep 5
-  done
-  if [ "$CONTAINER_IP" = "$RESERVED_IP" ]; then
-    log "Reservation now confirmed: $CONTAINER_IP"
-  else
-    warn "Still not on the reserved IP after a reboot (currently ${NEW_IP:-unknown}) — continuing with whatever's currently assigned, but this container's IP may not be stable yet. Investigate the UDM reservation manually if this persists."
-    [ -n "$NEW_IP" ] && [ "$NEW_IP" != "null" ] && CONTAINER_IP="$NEW_IP"
-  fi
-fi
 
 log "Verifying local DNS resolution for $FQDN..."
 DNS_OK=false
