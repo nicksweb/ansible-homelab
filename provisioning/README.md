@@ -1,11 +1,10 @@
-# Server Provisioning Toolkits
+# Server Provisioning
 
-Two independent, self-contained bash toolkits for turning a bare hostname
-into a running, reachable, HTTPS-capable server — complementary to the
-Ansible playbooks in this repo rather than replacing them. Provisioning
-creates the machine and the DNS/tunnel/TLS around it; onboarding (`onboard-linux`,
-`onboard-docker-host`, `playbooks/bootstrap.yml`, etc.) then applies the same
-Ansible baseline to it as everything else in the inventory.
+Turns a bare hostname into a running, reachable, HTTPS-capable server, then
+manages the websites (vhosts) on it. Creating the machine and wiring its
+DNS/tunnel is done by small bash orchestrators per backend (`*/bin/`);
+everything that runs *on* a server, and every vhost, is Ansible. This
+replaces the old standalone `server-provisioning` repo.
 
 | Toolkit | Backend | Use when |
 |---|---|---|
@@ -40,6 +39,40 @@ Cloudflare, the UDM, Tailscale keys and local state. Everything that runs
 invoked through `common/ansible.sh`. `common/` holds the helpers both
 toolkits share (Cloudflare, UDM, Tailscale, SSH, logging, the Ansible
 runner); `binarylane/lib/` keeps the BinaryLane-specific ones.
+
+## Server types compared
+
+Three kinds of server, one vhost workflow (see [Vhosts](#vhosts-ansible)).
+
+| | BinaryLane LAMP | BinaryLane docker | Proxmox LXC |
+|---|---|---|---|
+| Create with | `binarylane/bin/provision-server.sh` | `... --role docker --cloudflare-tunnel` | `proxmox/bin/provision-container.sh` |
+| Lives | Public cloud | Public cloud | Office LAN |
+| Web stack | Apache + PHP-FPM, local MySQL (or `--skip-mysql` / `--db-only` variants) | `web` nginx container for static sites, Nginx Proxy Manager, MariaDB container | Apache (optional MariaDB/phpMyAdmin stack via `deploy-mariadb-stack.sh`) |
+| In front of the web server | Nothing — Apache answers 80/443 itself | NPM on 443 (direct path); the tunnel goes straight to the container | Nothing — Apache answers 80/443 itself |
+| Host firewall (ufw) | SSH, and 80/443 **open to everyone** | SSH only. NPM's published 443 is restricted in the `DOCKER-USER` chain to Cloudflare's ranges + `TRUSTED_443_IPS` (ufw can't see Docker ports) | SSH, and 80/443 (LAN-only address) |
+| SSH | Key-only, fail2ban, management IP always allowed; also Tailscale SSH | Same | Key-only on the LAN; Tailscale optional (`enable-tailscale.sh`) |
+| Server's own name | `<name>.<domain>` — DNS-only A record, for SSH; not a website | Same | `<name>.<internal domain>` — UDM DHCP reservation |
+| Public path for a vhost | Cloudflare → tunnel (systemd `cloudflared`) → Apache :80 | Cloudflare → tunnel (`cloudflared` container) → `web:80` or the vhost's `service` | Cloudflare → tunnel (systemd `cloudflared`) → Apache :80 |
+| LAN path for a vhost (UDM) | `<vhost>` CNAME → `<name>.<domain>` A → public IP → Apache :443 | Same, → NPM :443 → `web:80` / `service` | `<vhost>` CNAME → `<name>.<internal domain>` → LAN IP → Apache :443 |
+| Vhost options | `php: none \| highest \| 8.3` | `service: http://container:port` | — |
+| Monitoring | Beszel agent → hub over the tailnet | Same | Beszel agent → hub's internal URL |
+
+### TLS certificates
+
+Every vhost has two certificates, one per path:
+
+- **Public visitors** get Cloudflare's edge certificate (Universal SSL),
+  issued and renewed by Cloudflare automatically. It covers `example.com`
+  and `*.example.com` only — a deeper name like `a.b.example.com` needs an
+  Advanced Certificate in Cloudflare.
+- **LAN clients on the direct path** get a Let's Encrypt certificate issued
+  on the server itself by the `certbot_dns01` role: DNS-01 through the
+  Cloudflare API, so it works for any name regardless of routing, one cert
+  per vhost. `certbot.timer` renews it (twice daily check, renews within 30
+  days of expiry) using the stored `/etc/letsencrypt/cloudflare.ini`, and a
+  deploy hook (`/etc/letsencrypt/renewal-hooks/deploy/reload-web`) reloads
+  Apache, or NPM's nginx on a docker server, so the new cert is served.
 
 ## Vhosts (Ansible)
 
