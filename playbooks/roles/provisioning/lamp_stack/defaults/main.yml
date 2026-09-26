@@ -1,0 +1,29 @@
+---
+lamp_stack_skip_mysql: false
+
+# Defaults to the target's own FQDN fact if not set (matches the original
+# script's `${1:-$(hostname -f)}`).
+lamp_stack_welcome_fqdn: ""
+
+lamp_stack_apache_modules:
+  - rewrite
+  - headers
+  - ssl
+  - proxy
+  - proxy_fcgi
+  - env
+  - deflate
+  - expires
+
+lamp_stack_php_packages:
+  - php-cli
+  - php-fpm
+  - php-mysql
+  - php-curl
+  - php-mbstring
+  - php-xml
+  - php-zip
+  - php-gd
+  - php-intl
+  - php-bcmath
+  - php-common

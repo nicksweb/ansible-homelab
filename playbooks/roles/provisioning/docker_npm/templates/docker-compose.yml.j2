@@ -1,0 +1,24 @@
+services:
+  npm:
+    image: {{ docker_npm_image }}
+    container_name: npm
+    restart: unless-stopped
+    ports:
+{% for p in docker_npm_published_ports %}
+      - "{{ p }}"
+{% endfor %}
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+      # Certs issued on the host by certbot_dns01, for the vhosts role's
+      # managed server blocks (NPM's own certs stay in ./letsencrypt).
+      - /etc/letsencrypt:/etc/letsencrypt-host:ro
+    networks:
+      - frontend
+      - backend
+
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

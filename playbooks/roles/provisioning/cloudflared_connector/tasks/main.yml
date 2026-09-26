@@ -1,0 +1,106 @@
+---
+# Installs cloudflared and configures it as a dedicated, locally-managed
+# tunnel connector for ONE initial hostname. Ported from
+# provisioning/common/install-cloudflared-remote.sh (canonicalized here over
+# the binarylane-specific copy's apt-repo install method, which has a real
+# codename-lag failure mode against new Ubuntu releases — GitHub's .deb
+# isn't tied to a codename).
+
+- name: Require a tunnel id, hostname, and token
+  ansible.builtin.assert:
+    that:
+      - cloudflared_connector_tunnel_id | length > 0
+      - cloudflared_connector_hostname | length > 0
+      - cloudflared_connector_token | length > 0
+    fail_msg: cloudflared_connector_tunnel_id, _hostname, and _token are all required.
+  no_log: true
+
+- name: Check whether cloudflared is already installed
+  ansible.builtin.stat:
+    path: /usr/bin/cloudflared
+  register: cloudflared_connector_bin
+
+- name: Install cloudflared from GitHub releases (codename-independent)
+  when: not cloudflared_connector_bin.stat.exists
+  become: true
+  block:
+    - name: Determine dpkg architecture
+      ansible.builtin.command: dpkg --print-architecture
+      register: cloudflared_connector_arch
+      changed_when: false
+
+    - name: Download the cloudflared .deb
+      ansible.builtin.get_url:
+        url: "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{{ cloudflared_connector_arch.stdout }}.deb"
+        dest: /tmp/cloudflared.deb
+        mode: '0644'
+
+    - name: Install the .deb
+      ansible.builtin.apt:
+        deb: /tmp/cloudflared.deb
+
+    - name: Remove the downloaded .deb
+      ansible.builtin.file:
+        path: /tmp/cloudflared.deb
+        state: absent
+
+- name: Ensure /etc/cloudflared exists
+  ansible.builtin.file:
+    path: /etc/cloudflared
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Write the connector token
+  ansible.builtin.copy:
+    dest: /etc/cloudflared/token
+    content: "{{ cloudflared_connector_token }}"
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+  no_log: true
+
+- name: Write the initial ingress config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: /etc/cloudflared/config.yml
+    owner: root
+    group: root
+    mode: '0644'
+    validate: "cloudflared tunnel --config %s ingress validate"
+  become: true
+
+- name: Install the cloudflared systemd unit
+  ansible.builtin.template:
+    src: cloudflared.service.j2
+    dest: /etc/systemd/system/cloudflared.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Reload systemd and enable/start cloudflared
+  ansible.builtin.systemd:
+    name: cloudflared
+    daemon_reload: true
+    enabled: true
+    state: started
+  become: true
+
+- name: Wait for cloudflared to reach active status
+  # cloudflared's own startup (QUIC handshake + edge registration +
+  # connectivity prechecks) can genuinely take longer than a couple of
+  # seconds, especially freshly booted — confirmed directly in the original
+  # script that a single fixed-delay check caught it mid-startup and failed
+  # the whole provisioning run even though systemd's Restart=on-failure
+  # would have brought it up correctly seconds later. Poll instead.
+  ansible.builtin.command: systemctl is-active cloudflared
+  become: true
+  register: cloudflared_connector_status
+  until: cloudflared_connector_status.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false

@@ -1,0 +1,26 @@
+---
+- name: Result per vhost
+  ansible.builtin.debug:
+    msg: >-
+      {%- set out = [] -%}
+      {%- for v in vhosts_present -%}
+      {%-   set s = vhosts_status[v.hostname] -%}
+      {%-   set _ = out.append(v.hostname ~ ': tunnel ' ~ s.tunnel
+              ~ (', direct ' ~ s.direct if s.direct else ', no direct path')
+              ~ (', UDM ' ~ prov_fqdn if v.hostname in vhosts_direct_ok and v.udm else ', no UDM record')) -%}
+      {%- endfor -%}
+      {%- for v in vhosts_absent -%}
+      {%-   set _ = out.append(v.hostname ~ ': removed') -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Every vhost is reachable through the tunnel, and directly where a UDM record was wanted
+  ansible.builtin.assert:
+    that:
+      - vhosts_present | map(attribute='hostname') | difference(vhosts_tunnel_ok) | length == 0
+      - vhosts_present | selectattr('udm') | map(attribute='hostname') | difference(vhosts_direct_ok) | length == 0 or not vhosts_direct_capable
+    fail_msg: >-
+      Not reachable through the tunnel: {{ vhosts_present | map(attribute='hostname') | difference(vhosts_tunnel_ok) | join(', ') or 'none' }}.
+      No working direct path (so no UDM record, LAN clients use Cloudflare): {{ (vhosts_present | selectattr('udm') | map(attribute='hostname') | difference(vhosts_direct_ok) | join(', ') or 'none') if vhosts_direct_capable else 'n/a' }}.
+      Re-run once fixed — everything converges.
+    quiet: true

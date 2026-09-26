@@ -12,6 +12,11 @@ Ansible baseline to it as everything else in the inventory.
 | [`proxmox/`](proxmox/README.md) | Proxmox VE (LXC containers) | You have a Proxmox cluster/host and want free, fast, local capacity |
 | [`binarylane/`](binarylane/README.md) | [BinaryLane](https://binarylane.com.au) (cloud VMs) | You need a publicly-hosted VM outside your own network, or don't run Proxmox |
 
+BinaryLane servers come in two flavours: LAMP (default) or `--role docker`
+(static sites in nginx + Nginx Proxy Manager behind a dedicated tunnel, with
+NPM's direct 443 restricted to Cloudflare and trusted IPs) — see
+[binarylane/README.md](binarylane/README.md#docker-static-site-servers---role-docker).
+
 Both share the same design:
 
 - **Split-horizon-friendly**: an internal DNS identity for SSH/admin, an
@@ -29,12 +34,52 @@ Both share the same design:
   about to do and asks for confirmation (`--yes` to skip, `--dry-run` to
   just see the plan) before creating or deleting anything.
 
-`common/` holds helpers shared by the Proxmox toolkit (SSH multiplexing,
-Cloudflare API wrapper, UDM/UniFi API wrapper, structured logging, remote
-installers). The BinaryLane toolkit predates that split and keeps its own
-copies of the equivalent helpers under `binarylane/lib/` and
-`binarylane/scripts/` — deliberately left alone rather than merged, so
-changes to one can't destabilize the other.
+The bash scripts under `*/bin/` only orchestrate: cloud/Proxmox APIs,
+Cloudflare, the UDM, Tailscale keys and local state. Everything that runs
+*on* a server is an Ansible role under `playbooks/roles/provisioning/`,
+invoked through `common/ansible.sh`. `common/` holds the helpers both
+toolkits share (Cloudflare, UDM, Tailscale, SSH, logging, the Ansible
+runner); `binarylane/lib/` keeps the BinaryLane-specific ones.
+
+## Vhosts (Ansible)
+
+Once a server exists, what it *serves* is declared in the Ansible
+inventory and converged by one playbook — for BinaryLane LAMP and
+`--role docker` servers and Proxmox containers alike.
+
+- **Inventory:** `provisioning/inventory/provisioned.py` lists every live
+  server straight from the toolkits' `state/` (groups `provisioned` >
+  `binarylane`, `proxmox_lxc`), so it never needs updating by hand.
+  It isn't in `ansible.cfg`'s default inventory — pass
+  `-i provisioning/inventory`.
+- **Declared vhosts:** `provisioning/inventory/host_vars/<server>/vhosts.yml`
+  (gitignored). Format and options (`service`, `udm`, `takeover`,
+  `state: absent`) in `playbooks/roles/provisioning/vhosts/defaults/main.yml`.
+
+```bash
+# from the repo root
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml    -l web01 -e vhost=shop.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_remove.yml -l web01 -e vhost=shop.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhosts.yml [-l web01]   # converge after editing vhosts.yml
+```
+
+Per vhost: a DNS-01 cert, the web server config (Apache on a LAMP server or
+container; the `web` container plus an NPM server block on a docker
+server), a route
+on the server's dedicated tunnel and a proxied Cloudflare CNAME. Then the
+direct HTTPS path is tested from the control host, and only if it works
+does the UDM get a record, so LAN clients go straight to the server:
+
+| Server | UDM static DNS |
+|---|---|
+| Proxmox container | `<vhost>` CNAME → `<container fqdn>` (its DHCP-reservation record) |
+| BinaryLane docker server | `<server fqdn>` A → public IP, and `<vhost>` CNAME → `<server fqdn>` (the office IP is on the server's 443 allow-list) |
+| BinaryLane LAMP server | as above — Apache answers 443 directly |
+
+If the direct path stops working, the next run withdraws the UDM record, so
+LAN clients fall back to Cloudflare instead of breaking. `destroy-*.sh` removes
+every declared vhost's CNAME and UDM records, then archives its host_vars.
+
 
 ## Getting started
 

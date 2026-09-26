@@ -1,0 +1,88 @@
+---
+# Installs Docker Engine + the Compose plugin via the official get.docker.com
+# convenience script. Ported from provisioning/proxmox/scripts/install-docker.sh.
+#
+# Deliberately NOT geerlingguy.docker (already in requirements.yml) for the
+# install step itself: that role's default install path is a pinned apt
+# repo keyed by distro codename, which has the exact same new-release-lag
+# failure mode documented for cloudflared's apt repo (confirmed in this
+# session: brand-new Ubuntu codenames routinely have no Release file there
+# yet). get.docker.com detects the distro/codename itself and has
+# historically been quick to add new releases — that's why the original
+# script uses it, and this role keeps that choice rather than reintroducing
+# the lag by switching to the Galaxy role's default method.
+#
+# Used for both Proxmox LXC containers and BinaryLane VMs. On LXC it
+# requires the container to have been created with Proxmox's `nesting=1`
+# feature — verified for real with `docker run hello-world` rather than
+# assuming the feature flag alone is sufficient. Preserve this functional
+# smoke test; don't simplify it down to a package-presence check.
+
+- name: Check whether Docker is already installed
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: docker --version
+  register: docker_engine_existing
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker via get.docker.com
+  ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
+  become: true
+  when: docker_engine_existing.rc != 0
+
+- name: Add the connecting user to the docker group
+  # ansible_user_id is a gathered fact (needs gather_facts: true); every
+  # provisioning entry-point playbook runs with gather_facts: false for
+  # speed, so use ansible_user — the inventory-supplied connection
+  # variable — instead. Confirmed directly: ansible_user_id is undefined
+  # here and fails the whole role before Docker is ever usable.
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  become: true
+
+- name: Enable and start the Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+  become: true
+
+- name: Reset the SSH connection to pick up the new docker group membership
+  ansible.builtin.meta: reset_connection
+
+- name: Verify Docker actually runs a container
+  ansible.builtin.command: docker run --rm hello-world
+  become: true
+  register: docker_engine_hello_world
+  changed_when: false
+  failed_when: "'Hello from Docker' not in docker_engine_hello_world.stdout"
+
+- name: Report Docker Compose version
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: docker compose version
+  become: true
+  register: docker_engine_compose_version
+  changed_when: false
+
+- name: Show versions
+  when: not ansible_check_mode
+  ansible.builtin.debug:
+    msg:
+      - "{{ docker_engine_hello_world.stdout_lines[0] }}"
+      - "{{ docker_engine_compose_version.stdout }}"
+
+- name: List existing Docker networks
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: docker network ls --format '{{ '{{' }}.Name{{ '}}' }}'
+  become: true
+  register: docker_engine_existing_networks
+  changed_when: false
+  when: docker_engine_networks | length > 0
+
+- name: Create shared external Docker networks
+  ansible.builtin.command: docker network create {{ item }}
+  become: true
+  loop: "{{ docker_engine_networks }}"
+  when: item not in docker_engine_existing_networks.stdout_lines

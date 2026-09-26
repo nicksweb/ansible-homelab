@@ -1,0 +1,125 @@
+---
+# Apache servers — Proxmox containers and BinaryLane LAMP servers: one
+# Apache vhost per hostname with its own DNS-01 cert (valid on the direct
+# path), all routed through the systemd cloudflared. Containers use the
+# sites-available layout; LAMP servers their vhosts.d layout with PHP-FPM.
+
+- name: Check which web server the container runs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /usr/sbin/nginx
+    - /usr/sbin/apache2
+  register: vhosts_websrv
+
+- name: Refuse a container that serves with nginx (e.g. the MariaDB stack) — vhosts here are Apache
+  ansible.builtin.assert:
+    that: not vhosts_websrv.results[0].stat.exists or vhosts_websrv.results[1].stat.exists
+    fail_msg: "{{ inventory_hostname }} runs nginx, not Apache — Apache vhosts would collide with it on 80/443."
+    quiet: true
+
+- name: Certificate per vhost (DNS-01)
+  ansible.builtin.include_role:
+    name: provisioning/certbot_dns01
+  vars:
+    certbot_dns01_fqdn: "{{ vhosts_item.hostname }}"
+    certbot_dns01_email: "{{ prov_letsencrypt_email }}"
+    certbot_dns01_cf_token: "{{ vhosts_cf_token }}"
+    certbot_dns01_deploy_hook: systemctl reload apache2
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+
+- name: Apache vhost per vhost (placeholder page only if the webroot is new)
+  ansible.builtin.include_role:
+    name: provisioning/site_vhost
+  vars:
+    site_vhost_hostname: "{{ vhosts_item.hostname }}"
+    site_vhost_style: "{{ 'vhosts_d' if vhosts_lamp else 'sites_available' }}"
+    site_vhost_php: "{{ vhosts_item.php or 'highest' }}"
+    site_vhost_ssl: true
+    site_vhost_cert_dir: "/etc/letsencrypt/live/{{ vhosts_item.hostname }}"
+    site_vhost_welcome_subtitle: Provisioned by the vhosts Ansible role.
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+
+- name: Remove the Apache vhosts and certs of absent entries (webroots are kept)
+  ansible.builtin.shell: |
+    set -e
+    changed=0
+    for c in "{{ vhosts_conf }}" "{{ vhosts_conf }}-ssl"; do
+      if [ -e "/etc/apache2/sites-available/$c.conf" ]; then
+        a2dissite -q "$c" || true
+        rm -f "/etc/apache2/sites-available/$c.conf"
+        changed=1
+      fi
+    done
+    for f in "/etc/apache2/vhosts.d/{{ vhosts_item.hostname }}.conf" "/etc/apache2/vhosts.d/{{ vhosts_item.hostname }}-ssl.conf"; do
+      if [ -e "$f" ]; then rm -f "$f"; changed=1; fi
+    done
+    if [ -d "/etc/letsencrypt/live/{{ vhosts_item.hostname }}" ]; then
+      certbot delete --non-interactive --cert-name "{{ vhosts_item.hostname }}"
+      changed=1
+    fi
+    echo "changed=$changed"
+  vars:
+    vhosts_conf: "site-{{ vhosts_item.hostname | regex_replace('[^a-zA-Z0-9]', '-') }}"
+  loop: "{{ vhosts_absent }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+  register: vhosts_lxc_removed
+  changed_when: "'changed=1' in vhosts_lxc_removed.stdout"
+
+- name: Reload Apache after removals
+  ansible.builtin.systemd:
+    name: apache2
+    state: reloaded
+  when: vhosts_lxc_removed is changed
+
+- name: Check for an installed tunnel connector
+  ansible.builtin.stat:
+    path: /etc/cloudflared/token
+  register: vhosts_connector
+
+- name: Install the tunnel connector
+  when: not vhosts_connector.stat.exists and vhosts_present | length > 0
+  block:
+    - name: Fetch the tunnel's connector token
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/accounts/{{ vhosts_cf_account }}/cfd_tunnel/{{ vhosts_tunnel_id }}/token"
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+      delegate_to: localhost
+      become: false
+      register: vhosts_tunnel_token
+      failed_when: false
+      no_log: true
+
+    - name: Token fetch succeeded
+      ansible.builtin.assert:
+        that: vhosts_tunnel_token.status == 200
+        fail_msg: "Could not fetch the connector token for tunnel {{ vhosts_tunnel_id }}: HTTP {{ vhosts_tunnel_token.status }}"
+        quiet: true
+
+    - name: Install cloudflared as a systemd connector
+      ansible.builtin.include_role:
+        name: provisioning/cloudflared_connector
+      vars:
+        cloudflared_connector_tunnel_id: "{{ vhosts_tunnel_id }}"
+        cloudflared_connector_hostname: "{{ vhosts_present[0].hostname }}"
+        cloudflared_connector_token: "{{ vhosts_tunnel_token.json.result }}"
+
+- name: Route the provisioning hostname(s) and every vhost through the tunnel
+  ansible.builtin.include_role:
+    name: provisioning/tunnel_ingress
+  vars:
+    tunnel_ingress_tunnel_id: "{{ vhosts_tunnel_id }}"
+    tunnel_ingress_hostnames: "{{ (vhosts_base_names + vhosts_present | map(attribute='hostname') | list) | unique }}"
+  when: vhosts_tunnel_id | length > 0 and (vhosts_connector.stat.exists or vhosts_present | length > 0)
+
+- name: Apply pending reloads/restarts now, so the checks below see the new config
+  ansible.builtin.meta: flush_handlers

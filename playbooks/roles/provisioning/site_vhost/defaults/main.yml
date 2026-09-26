@@ -1,0 +1,27 @@
+---
+site_vhost_hostname: ""
+
+# "sites_available" (Proxmox toolkit convention: /etc/apache2/sites-
+# available/<conf-name>.conf + a2ensite, webroot under /var/www/<hostname>,
+# optional SSL vhost variant with a SAN-coverage check against an existing
+# cert) or "vhosts_d" (BinaryLane toolkit convention: install-lamp.sh's
+# /etc/apache2/vhosts.d/<fqdn>.conf include-directory, webroot under
+# /var/www/html/sites/<fqdn>/public, optional PHP-FPM wiring). With
+# site_vhost_ssl, both styles also get a :443 vhost on the cert in
+# site_vhost_cert_dir once it exists.
+site_vhost_style: sites_available
+
+site_vhost_welcome_subtitle: "Provisioned via Ansible."
+
+# sites_available style only. Set true for the container's OWN internal
+# FQDN (gets fixed conf names "000-internal"/"000-internal-ssl" and
+# webroot /var/www/html, matching the original script's special-casing);
+# false (default) for any other/public hostname (gets a name derived from
+# the hostname itself and its own dedicated webroot under /var/www/<hostname>).
+site_vhost_is_internal: false
+site_vhost_ssl: false
+site_vhost_cert_dir: ""
+
+# vhosts_d style only. "none" (static, no PHP block), "highest" (use the
+# newest php-fpm socket found), or an explicit version like "8.3".
+site_vhost_php: none

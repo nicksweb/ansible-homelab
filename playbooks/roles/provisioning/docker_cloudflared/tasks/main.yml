@@ -1,0 +1,68 @@
+---
+# cloudflared as a container on the shared `frontend` network, routing to
+# other containers by name. The Docker twin of cloudflared_connector, and a
+# full-desired-state rewrite like tunnel_ingress: the orchestrator always
+# passes every route from its local state, so the config can't drift.
+# Ported from server-provisioning's scripts/install-cloudflared-docker-remote.sh
+# + scripts/add-tunnel-route-remote.sh.
+
+- name: Require a tunnel id and at least one route
+  ansible.builtin.assert:
+    that:
+      - docker_cloudflared_tunnel_id | length > 0
+      - docker_cloudflared_routes | length > 0
+    fail_msg: docker_cloudflared_tunnel_id and docker_cloudflared_routes are required.
+
+- name: Create the stack directory
+  ansible.builtin.file:
+    path: "{{ docker_cloudflared_dir }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+
+- name: Write the connector token
+  ansible.builtin.copy:
+    dest: "{{ docker_cloudflared_dir }}/.env"
+    content: "CLOUDFLARED_TOKEN={{ docker_cloudflared_token }}\n"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  no_log: true
+  when: docker_cloudflared_token | length > 0
+  notify: "restart cloudflared container"
+
+- name: Check a connector token is already present
+  ansible.builtin.stat:
+    path: "{{ docker_cloudflared_dir }}/.env"
+  register: docker_cloudflared_env_stat
+
+- name: Fail if there's no token on the server and none was passed
+  ansible.builtin.assert:
+    that: docker_cloudflared_env_stat.stat.exists
+    fail_msg: "No {{ docker_cloudflared_dir }}/.env on the server — pass docker_cloudflared_token for the first install."
+
+- name: Write the ingress config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ docker_cloudflared_dir }}/config.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+    validate: "docker run --rm -v %s:/etc/cloudflared/config.yml:ro {{ docker_cloudflared_image }} tunnel --config /etc/cloudflared/config.yml ingress validate"
+  notify: "restart cloudflared container"
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ docker_cloudflared_dir }}/docker-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Start cloudflared
+  community.docker.docker_compose_v2:
+    project_src: "{{ docker_cloudflared_dir }}"
+    state: present
+    wait: true
+    wait_timeout: 60

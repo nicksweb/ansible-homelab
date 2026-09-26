@@ -1,0 +1,85 @@
+---
+# Restricts a Docker-published port via the DOCKER-USER iptables chain —
+# NOT ufw. Docker's own ACCEPT rules for published ports are evaluated
+# before ufw's forward filtering, so ufw never sees this traffic.
+# DOCKER-USER is Docker's documented hook for rules that run first.
+# Generalised from server-provisioning's scripts/docker-port-fw-remote.sh.
+#
+# Fix vs. the original script: rules now match only traffic arriving on
+# the external interface, by its ORIGINAL (pre-DNAT) destination port. The
+# original matched any forwarded packet with --dport 443, which also
+# dropped every container's OUTBOUND HTTPS (NPM couldn't reach Let's
+# Encrypt; confirmed on web01 on 2026-09-24).
+#
+# Applied now AND via a systemd oneshot after docker.service, so a reboot
+# can't silently fall back to "open to everyone".
+
+- name: Require a rule name and at least one CIDR
+  ansible.builtin.assert:
+    that:
+      - docker_port_allowlist_rule_name | length > 0
+      - docker_port_allowlist_cidrs | length > 0
+    fail_msg: docker_port_allowlist_rule_name and docker_port_allowlist_cidrs are required.
+
+- name: Detect the default-route interface
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.shell: ip -o route show default | awk '{print $5; exit}'
+  register: docker_port_allowlist_detected_if
+  changed_when: false
+  when: docker_port_allowlist_interface | length == 0
+
+- name: Set the effective interface
+  ansible.builtin.set_fact:
+    docker_port_allowlist_effective_if: "{{ docker_port_allowlist_interface if docker_port_allowlist_interface | length > 0 else docker_port_allowlist_detected_if.stdout }}"
+
+- name: Require a usable interface
+  ansible.builtin.assert:
+    that: docker_port_allowlist_effective_if | length > 0
+    fail_msg: Could not detect the default-route interface — set docker_port_allowlist_interface.
+
+- name: Write the rules script
+  ansible.builtin.template:
+    src: fw-rules.sh.j2
+    dest: "/usr/local/sbin/{{ docker_port_allowlist_rule_name }}-fw-rules.sh"
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  register: docker_port_allowlist_script
+
+- name: Install the systemd unit that re-applies the rules at boot
+  ansible.builtin.template:
+    src: fw-rules.service.j2
+    dest: "/etc/systemd/system/{{ docker_port_allowlist_rule_name }}-fw-rules.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  register: docker_port_allowlist_unit
+
+- name: Enable the unit
+  ansible.builtin.systemd:
+    name: "{{ docker_port_allowlist_rule_name }}-fw-rules.service"
+    daemon_reload: "{{ docker_port_allowlist_unit.changed }}"
+    enabled: true
+  become: true
+
+- name: Apply the rules now
+  # Always run (a full rebuild is cheap and idempotent), but only report a
+  # change when the rule set itself changed.
+  ansible.builtin.command: "/usr/local/sbin/{{ docker_port_allowlist_rule_name }}-fw-rules.sh"
+  become: true
+  changed_when: docker_port_allowlist_script.changed
+
+- name: Show the resulting rules
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.shell: |
+    iptables -S DOCKER-USER | grep -F -- '{{ docker_port_allowlist_rule_name }}' || true
+    ip6tables -S DOCKER-USER | grep -F -- '{{ docker_port_allowlist_rule_name }}' || true
+  become: true
+  register: docker_port_allowlist_rules
+  changed_when: false
+
+- name: Report the rules
+  ansible.builtin.debug:
+    var: docker_port_allowlist_rules.stdout_lines

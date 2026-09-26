@@ -1,0 +1,8 @@
+---
+# cloudflared's unit has no reload (a locally managed tunnel only reads its
+# ingress at startup), so a changed config always means a restart.
+- name: Restart cloudflared
+  ansible.builtin.systemd:
+    name: cloudflared
+    state: restarted
+  listen: "reload cloudflared"

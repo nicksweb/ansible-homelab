@@ -11,6 +11,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: destroy-server.sh <name> [--yes]}"
@@ -33,9 +35,17 @@ TUNNEL_ZONE_ID="$(state_read_field "$NAME" '.cloudflare.tunnel_zone_id // empty'
 # Older records (before tunnel_zone_id was tracked separately) assumed the
 # tunnel hostname shared the server's own zone — fall back to that for them.
 [ -z "$TUNNEL_ZONE_ID" ] && TUNNEL_ZONE_ID="$ZONE_ID"
+# Extra tunnel routes created at provisioning (--role docker: NPM admin/proxy) —
+# every CNAME except the primary one, which is handled on its own below.
+EXTRA_ROUTES="$(jq -r --arg primary "$TUNNEL_RECORD_ID" \
+  '.cloudflare.tunnel_routes // [] | .[] | select(.dns_record_id != $primary) | "\(.zone_id)\t\(.dns_record_id)\t\(.hostname)"' \
+  "$(state_file "$NAME")")"
+TAILSCALE_ENABLED="$(state_read_field "$NAME" '.tailscale.enabled // false')"
+TAILSCALE_HOSTNAME="$(state_read_field "$NAME" '.tailscale.hostname // empty')"
 
 load_binarylane_key
 load_cloudflare_creds
+[ "$TAILSCALE_ENABLED" = "true" ] && load_tailscale_creds
 
 # Positively identify the BinaryLane resource before touching it.
 BL="$(bl_api GET "/servers/$SERVER_ID")" || die "Could not fetch BinaryLane server $SERVER_ID to verify identity before deletion"
@@ -62,10 +72,28 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   echo "  Tunnel ID:       ${TUNNEL_ID:-none recorded}"
   echo "  CNAME record id: ${TUNNEL_RECORD_ID:-none recorded}"
   echo "  The tunnel itself will be deleted via the Cloudflare API (it belongs only to this server)"
+  if [ -n "$EXTRA_ROUTES" ]; then
+    echo "  Extra tunnel hostnames (CNAMEs deleted too):"
+    echo "$EXTRA_ROUTES" | awk -F'\t' '{print "    " $3 " (record " $2 ")"}'
+  fi
 else
   echo "Cloudflare Tunnel: Not Configured"
 fi
 echo
+if [ "$TAILSCALE_ENABLED" = "true" ]; then
+  echo "Tailscale device:"
+  echo "  Hostname: $TAILSCALE_HOSTNAME"
+  echo "  Will be removed from the tailnet via the Tailscale API"
+else
+  echo "Tailscale: Not Configured"
+fi
+echo
+DECLARED_VHOSTS="$(ansible_declared_vhosts "$NAME")"
+if [ -n "$DECLARED_VHOSTS" ]; then
+  echo "Vhosts declared in provisioning/inventory (Cloudflare CNAME + UDM record of each deleted via Ansible):"
+  echo "$DECLARED_VHOSTS" | sed 's/^/  - /'
+  echo
+fi
 echo "The provisioning record at $(record_file "$NAME") will be KEPT and marked DESTROYED (audit trail)."
 echo "============================================================"
 
@@ -80,6 +108,9 @@ log "BinaryLane server deleted."
 DESTROYED_IP="$(state_read_field "$NAME" '.public_ipv4 // empty')"
 [ -n "$DESTROYED_IP" ] && ssh_close_multiplexed "$ADMIN_USER" "$DESTROYED_IP"
 
+# Vhosts declared in provisioning/inventory: their CNAMEs and UDM records.
+ansible_vhosts_teardown "$NAME" || warn "Vhost DNS teardown failed — check the output above and remove leftover Cloudflare CNAMEs / UDM static DNS records by hand."
+
 if [ -n "$A_RECORD_ID" ]; then
   log "Deleting Cloudflare A record $A_RECORD_ID..."
   cf_api DELETE "/zones/${ZONE_ID}/dns_records/${A_RECORD_ID}" >/dev/null || warn "Failed to delete Cloudflare A record $A_RECORD_ID — remove manually."
@@ -90,6 +121,11 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
     log "Deleting Cloudflare Tunnel CNAME record $TUNNEL_RECORD_ID..."
     cf_api DELETE "/zones/${TUNNEL_ZONE_ID}/dns_records/${TUNNEL_RECORD_ID}" >/dev/null || warn "Failed to delete tunnel CNAME $TUNNEL_RECORD_ID — remove manually."
   fi
+  while IFS=$'\t' read -r R_ZONE R_ID R_HOST; do
+    [ -n "$R_ID" ] || continue
+    log "Deleting tunnel CNAME $R_HOST ($R_ID)..."
+    cf_api DELETE "/zones/${R_ZONE}/dns_records/${R_ID}" >/dev/null || warn "Failed to delete CNAME $R_HOST ($R_ID) — remove manually."
+  done <<< "$EXTRA_ROUTES"
   if [ -n "$TUNNEL_ID" ]; then
     log "Deleting dedicated Cloudflare Tunnel $TUNNEL_ID (the remote server it ran on is already gone)..."
     # Cloudflare rejects deletion with "active connections" for a short window
@@ -120,6 +156,10 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
   fi
 fi
 
+if [ "$TAILSCALE_ENABLED" = "true" ] && [ -n "$TAILSCALE_HOSTNAME" ]; then
+  tailscale_delete_device_by_hostname "$TAILSCALE_HOSTNAME"
+fi
+
 NOW="$(date -Iseconds)"
 state_write "$NAME" "$(jq -n --arg destroyed "$NOW" '. ' <<< "$(cat "$(state_file "$NAME")")" | jq --arg destroyed "$NOW" '.status = "DESTROYED" | .destroyed_at = $destroyed')"
 
@@ -134,6 +174,7 @@ RECORD="$(record_file "$NAME")"
   echo "BinaryLane Server:"; echo "Deleted"
   echo "Cloudflare DNS Record:"; echo "Deleted"
   echo "Cloudflare Tunnel:"; echo "$( [ "$TUNNEL_ENABLED" = "true" ] && echo Deleted || echo 'Not Configured' )"
+  echo "Tailscale:"; echo "$( [ "$TAILSCALE_ENABLED" = "true" ] && echo "Removed ($TAILSCALE_HOSTNAME)" || echo 'Not Configured' )"
 } >> "$RECORD"
 chmod 600 "$RECORD"
 

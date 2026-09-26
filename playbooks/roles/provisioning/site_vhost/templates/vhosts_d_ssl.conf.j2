@@ -1,0 +1,25 @@
+<VirtualHost *:443>
+    ServerAdmin webmaster@{{ site_vhost_hostname }}
+    ServerName {{ site_vhost_hostname }}
+    DocumentRoot {{ site_vhost_effective_webroot }}
+
+    SSLEngine on
+    SSLCertificateFile {{ site_vhost_cert_dir }}/fullchain.pem
+    SSLCertificateKeyFile {{ site_vhost_cert_dir }}/privkey.pem
+
+    ErrorLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.error.log
+    CustomLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.access.log combined
+
+    <FilesMatch "^\.ht">
+        Require all denied
+    </FilesMatch>
+{% if site_vhost_php_socket | default('') | length > 0 %}
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:{{ site_vhost_php_socket }}|fcgi://localhost"
+    </FilesMatch>
+{% endif %}
+    <Directory {{ site_vhost_effective_webroot }}>
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>

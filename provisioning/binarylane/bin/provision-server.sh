@@ -23,6 +23,10 @@
 #                                  skipped with a clear warning if DNS hasn't propagated in time.
 #   --letsencrypt-email EMAIL     Contact email for the cert (default: config LETSENCRYPT_EMAIL, or
 #                                  none — registers with --register-unsafely-without-email)
+#   --skip-tailscale               Don't join the server to the tailnet (default: joined,
+#                                  tagged $TAILSCALE_TAG, reachable via Tailscale SSH)
+#   --skip-beszel                  Don't install the Beszel monitoring agent (default: installed
+#                                  when BESZEL_HUB_URL is set; reaches the hub over the tailnet)
 #   --skip-lamp                   Skip LAMP install
 #   --skip-mysql                  Install Apache/PHP but skip local MySQL (this server
 #                                  expects to connect to a separate --db-only server instead)
@@ -32,6 +36,18 @@
 #   --db-allow-from IP[,IP...]    Required with --db-only. IPv4 address(es)/CIDR(s) allowed
 #                                  through ufw to reach MySQL (typically the app server's
 #                                  own public IP, from its state file after provisioning it).
+#   --role docker                 Docker + internal MariaDB + nginx (static sites) + Nginx Proxy
+#                                  Manager, instead of LAMP. Requires --cloudflare-tunnel: the tunnel
+#                                  is the main way in. The host never opens 80/443 in ufw; NPM's
+#                                  published 443 is restricted (DOCKER-USER chain) to Cloudflare's
+#                                  ranges plus TRUSTED_443_IPS/--trusted-ip. Mutually exclusive with
+#                                  --db-only/--skip-mysql/--skip-lamp/--enable-tls.
+#   --no-npm                      --role docker without Nginx Proxy Manager (no published ports at all)
+#   --npm-admin-hostname FQDN     Tunnel hostname for NPM's admin UI (default nginx-NAME.<domain>)
+#   --npm-proxy-hostname FQDN     Tunnel hostname for NPM's :80 proxy (default NAME-nginx.<domain>)
+#   --trusted-ip IP[,IP...]       Extra IPs/CIDRs allowed to reach NPM's 443 directly, on top of
+#                                  config TRUSTED_443_IPS and Cloudflare's published ranges
+#   --extra-ssh-key PATH          Another public key to authorize for ADMIN_USER at first boot
 #   --skip-harden                 Skip SSH/firewall hardening (not recommended)
 #   --dry-run                     Print the plan and exit, no chargeable action taken
 #   --yes                         Skip the interactive confirmation prompt
@@ -40,6 +56,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/docker.sh"
 require_jq
 
 NAME="" DOMAIN="" CF_TUNNEL=false CF_HOSTNAME=""
@@ -48,7 +68,9 @@ case "${CLOUDFLARE_PROXY:-false}" in
   *) CF_PROXY="off" ;;
 esac
 SKIP_LAMP=false SKIP_HARDEN=false DRY_RUN=false ASSUME_YES=false
+SKIP_TAILSCALE=false SKIP_BESZEL=false
 SKIP_MYSQL=false DB_ONLY=false DB_ALLOW_FROM=""
+DOCKER_ROLE=false DOCKER_NPM=true NPM_ADMIN_HOSTNAME="" NPM_PROXY_HOSTNAME="" TRUSTED_IPS_ARG="" EXTRA_SSH_KEY=""
 ENABLE_TLS=false LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
 REGION="$BINARYLANE_REGION" PLAN="$BINARYLANE_PLAN" IMAGE="$BINARYLANE_IMAGE"
 
@@ -64,10 +86,18 @@ while [ $# -gt 0 ]; do
     --cloudflare-proxy) CF_PROXY="$2"; shift 2 ;;
     --enable-tls) ENABLE_TLS=true; shift ;;
     --letsencrypt-email) LETSENCRYPT_EMAIL="$2"; shift 2 ;;
+    --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
+    --skip-beszel) SKIP_BESZEL=true; shift ;;
     --skip-lamp) SKIP_LAMP=true; shift ;;
     --skip-mysql) SKIP_MYSQL=true; shift ;;
     --db-only) DB_ONLY=true; shift ;;
     --db-allow-from) DB_ALLOW_FROM="$2"; shift 2 ;;
+    --role) [ "$2" = "docker" ] || die "--role only accepts 'docker' (omit --role entirely for the default LAMP behavior)"; DOCKER_ROLE=true; shift 2 ;;
+    --no-npm) DOCKER_NPM=false; shift ;;
+    --npm-admin-hostname) NPM_ADMIN_HOSTNAME="$2"; shift 2 ;;
+    --npm-proxy-hostname) NPM_PROXY_HOSTNAME="$2"; shift 2 ;;
+    --trusted-ip) TRUSTED_IPS_ARG="$2"; shift 2 ;;
+    --extra-ssh-key) EXTRA_SSH_KEY="$2"; shift 2 ;;
     --skip-harden) SKIP_HARDEN=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --yes) ASSUME_YES=true; shift ;;
@@ -95,6 +125,39 @@ if $DB_ONLY; then
   SKIP_LAMP=true
 fi
 
+if $DOCKER_ROLE; then
+  { $DB_ONLY || $SKIP_MYSQL || $SKIP_LAMP; } && die "--role docker is mutually exclusive with --db-only/--skip-mysql/--skip-lamp (it replaces the whole LAMP install with Docker)"
+  $ENABLE_TLS && die "--enable-tls doesn't apply to --role docker servers (no Apache/certbot; NPM handles its own certificates) — drop it"
+  $CF_TUNNEL || die "--role docker requires --cloudflare-tunnel and --cloudflare-hostname — the tunnel is this role's main way in"
+  if $DOCKER_NPM; then
+    : "${NPM_ADMIN_HOSTNAME:=nginx-${NAME}.${SERVER_DOMAIN}}"
+    : "${NPM_PROXY_HOSTNAME:=${NAME}-nginx.${SERVER_DOMAIN}}"
+  fi
+  SKIP_LAMP=true
+elif $DOCKER_NPM && [ -n "$NPM_ADMIN_HOSTNAME$NPM_PROXY_HOSTNAME$TRUSTED_IPS_ARG" ]; then
+  die "--npm-admin-hostname/--npm-proxy-hostname/--trusted-ip only apply with --role docker"
+fi
+if ! $SKIP_BESZEL; then
+  if [ -z "$BESZEL_HUB_URL" ] || [ -z "$BESZEL_HUB_KEY" ]; then
+    warn "BESZEL_HUB_URL/BESZEL_HUB_KEY not set in config.env — skipping the Beszel agent"
+    SKIP_BESZEL=true
+  elif $SKIP_TAILSCALE && [[ "$BESZEL_HUB_URL" == *.ts.net* ]]; then
+    die "BESZEL_HUB_URL ($BESZEL_HUB_URL) is a tailnet address, which needs Tailscale — drop --skip-tailscale, or add --skip-beszel"
+  fi
+fi
+TRUSTED_443="$(printf '%s,%s' "${TRUSTED_443_IPS:-}" "$TRUSTED_IPS_ARG" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | awk 'NF && !seen[$0]++' | paste -sd, -)"
+
+EXTRA_SSH_KEYS_YAML=""
+if [ -n "$EXTRA_SSH_KEY" ]; then
+  [ -f "$EXTRA_SSH_KEY" ] || die "--extra-ssh-key: $EXTRA_SSH_KEY not found"
+  if [ "$(awk '{print $2}' "$EXTRA_SSH_KEY")" = "$(awk '{print $2}' "${PROVISIONING_SSH_KEY}.pub" 2>/dev/null)" ]; then
+    warn "--extra-ssh-key is the same key as the provisioning key — ignoring it"
+    EXTRA_SSH_KEY=""
+  else
+    EXTRA_SSH_KEYS_YAML="      - $(cat "$EXTRA_SSH_KEY")"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Phase 6: duplicate / safety checks
 # ---------------------------------------------------------------------------
@@ -115,6 +178,8 @@ if [ -n "$BL_MATCH" ]; then
 fi
 
 load_cloudflare_creds
+$SKIP_TAILSCALE || load_tailscale_creds
+$SKIP_BESZEL || load_beszel_creds
 if [ -n "$DOMAIN" ]; then
   log "Resolving Cloudflare zone ID for custom domain '$DOMAIN'..."
   CLOUDFLARE_ZONE_ID="$(resolve_zone_id_for_domain "$DOMAIN")" || exit 1
@@ -181,7 +246,10 @@ SSH_FINGERPRINT_MD5="$(ssh-keygen -E md5 -lf "${PROVISIONING_SSH_KEY}.pub" | awk
 # ---------------------------------------------------------------------------
 # Print the plan and stop for confirmation
 # ---------------------------------------------------------------------------
-if $DB_ONLY; then
+if $DOCKER_ROLE; then
+  ROLE_LINE="Docker (internal MariaDB + nginx static sites$( $DOCKER_NPM && echo " + Nginx Proxy Manager on 443"))"
+  LAMP_LINE="N/A — Docker stack instead (see Server Role above)"
+elif $DB_ONLY; then
   ROLE_LINE="Database only (standalone MySQL — ufw-restricted to: $DB_ALLOW_FROM)"
   LAMP_LINE="N/A — standalone MySQL install instead (see Server Role above)"
 elif $SKIP_LAMP; then
@@ -219,8 +287,12 @@ Cloudflare Tunnel:   $( $CF_TUNNEL && echo "ENABLED — dedicated per-server tun
 $( $CF_TUNNEL && echo "  Public hostname: $CF_HOSTNAME (proxied CNAME once the tunnel is created)" )
 $( $CF_TUNNEL && echo "  cloudflared will be installed on the new server itself, with only its own connector token" )
 
+Tailscale:            $( $SKIP_TAILSCALE && echo "Disabled" || echo "ENABLED — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH + MagicDNS on (installed before hardening, as a fallback access path)" )
+Beszel Monitoring:    $( $SKIP_BESZEL && echo "Skipped" || echo "Enabled -> $BESZEL_HUB_URL" )
 LAMP install:        $LAMP_LINE
-Hardening:            $( $SKIP_HARDEN && echo "Skipped" || echo "Key-only SSH, root login disabled, ufw, fail2ban, unattended-upgrades" )
+Hardening:            $( $SKIP_HARDEN && echo "Skipped" || echo "Key-only SSH, root login disabled, ufw, fail2ban, unattended-upgrades" )$( $DOCKER_ROLE && echo " (ufw: SSH only)" )
+$( $DOCKER_ROLE && $DOCKER_NPM && printf '%s\n' "NPM admin (tunnel):   $NPM_ADMIN_HOSTNAME -> http://npm:81" "NPM proxy (tunnel):   $NPM_PROXY_HOSTNAME -> http://npm:80" "NPM direct 443:       Cloudflare ranges + trusted: ${TRUSTED_443:-<none>}" )
+$( [ -n "$EXTRA_SSH_KEY" ] && echo "Extra SSH key:        $EXTRA_SSH_KEY" )
 Let's Encrypt (base FQDN): $( $ENABLE_TLS && echo "Enabled — real cert for $FQDN, only attempted if DNS has actually propagated" || echo "Disabled" )
 ============================================================
 
@@ -253,8 +325,10 @@ fi
 # ---------------------------------------------------------------------------
 # Phase 7: create the server
 # ---------------------------------------------------------------------------
+UFW_WEB_PORTS="80,443"; $DOCKER_ROLE && UFW_WEB_PORTS=""
 CLOUD_INIT="$(SHORT_NAME="$NAME" FQDN="$FQDN" ADMIN_USER="$ADMIN_USER" TIMEZONE="$TIMEZONE" SSH_PUBLIC_KEY="$SSH_PUBLIC_KEY" \
-  envsubst '$SHORT_NAME $FQDN $ADMIN_USER $TIMEZONE $SSH_PUBLIC_KEY' < "$HERE/templates/cloud-init.yaml.tmpl")"
+  EXTRA_SSH_KEYS_YAML="$EXTRA_SSH_KEYS_YAML" UFW_WEB_PORTS="$UFW_WEB_PORTS" \
+  envsubst '$SHORT_NAME $FQDN $ADMIN_USER $TIMEZONE $SSH_PUBLIC_KEY $EXTRA_SSH_KEYS_YAML $UFW_WEB_PORTS' < "$HERE/templates/cloud-init.yaml.tmpl")"
 
 SERVER_ID=""
 for TRY_REGION in "${REGION_ATTEMPTS[@]}"; do
@@ -365,10 +439,58 @@ done
 $SSH_OK || die "Could not establish SSH as $ADMIN_USER within the timeout. Server id=$SERVER_ID, ip=$PUBLIC_IP — investigate via BinaryLane console before retrying."
 log "SSH confirmed as $ADMIN_USER."
 
-# Second independent session, per hardening safety requirement, before we let harden-ssh.sh touch sshd.
+# Second independent session, per hardening safety requirement, before we let the ssh_harden role touch sshd.
 ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo second-session-ok' >/dev/null 2>&1 \
   || die "Second SSH session check failed — refusing to run hardening. Investigate before retrying."
 log "Second SSH session confirmed — safe to proceed with hardening."
+
+# ---------------------------------------------------------------------------
+# Tailscale (optional, default on) — installed before hardening deliberately,
+# so it's an independent, already-working fallback access path (Tailscale
+# SSH) in case the hardening stage below ever misconfigures sshd/ufw.
+# ---------------------------------------------------------------------------
+TAILSCALE_OK=false TS_HOSTNAME="" TS_KEY_ID_USED=""
+if ! $SKIP_TAILSCALE; then
+  log "Minting a tagged Tailscale authkey ($TAILSCALE_TAG) for $NAME..."
+  tailscale_mint_authkey "binarylane-$NAME"
+  TS_KEY_ID_USED="$TS_KEY_ID"
+  TS_HOSTNAME="$NAME"
+  log "Installing Tailscale and joining the tailnet as '$TS_HOSTNAME' via Ansible..."
+  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key, tailscale_join_accept_dns:true}')"
+  unset TS_AUTH_KEY
+  if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
+    TAILSCALE_OK=true
+    log "Tailscale joined."
+  else
+    warn "Tailscale install/join failed — continuing with the rest of provisioning. The minted authkey ($TS_KEY_ID_USED) was never consumed by a device; revoking it."
+    tailscale_revoke_key "$TS_KEY_ID_USED"
+  fi
+  unset TAILSCALE_VARS
+fi
+
+# ---------------------------------------------------------------------------
+# Beszel monitoring agent (default on when configured). The agent dials out
+# to the hub over a WebSocket, so nothing opens inbound here. It goes via
+# the tailnet: the hub's public hostname is behind Cloudflare Access.
+# ---------------------------------------------------------------------------
+BESZEL_OK=false
+if ! $SKIP_BESZEL; then
+  if ! $TAILSCALE_OK && [[ "$BESZEL_HUB_URL" == *.ts.net* ]]; then
+    warn "Tailscale didn't join, so the tailnet hub $BESZEL_HUB_URL is unreachable — skipping the Beszel agent"
+  else
+    log "Installing Beszel agent via Ansible (hub: $BESZEL_HUB_URL)..."
+    BESZEL_VARS="$(jq -n --arg url "$BESZEL_HUB_URL" --arg key "$BESZEL_HUB_KEY" --argjson port "$BESZEL_PORT" --arg token "$BESZEL_TOKEN" \
+      '{beszel_agent_hub_url:$url, beszel_agent_hub_key:$key, beszel_agent_port:$port, beszel_agent_token:$token}')"
+    if ansible_run_playbook "playbooks/provisioning/beszel_agent.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$BESZEL_VARS"; then
+      BESZEL_OK=true
+      log "Beszel agent connected."
+    else
+      warn "Beszel agent install/connection failed — not fatal. Check 'journalctl -u beszel-agent' on the server."
+    fi
+    unset BESZEL_VARS
+  fi
+fi
+unset BESZEL_TOKEN
 
 # ---------------------------------------------------------------------------
 # Harden — staged in two steps, each externally verified before the next
@@ -383,36 +505,74 @@ if ! $SKIP_HARDEN; then
     warn "Could not resolve $MANAGEMENT_SSH_HOSTNAME — proceeding without an explicit management-IP allow rule"
   fi
 
-  log "Stage 1/2: SSH + firewall hardening..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/harden-ssh.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/harden-ssh.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/harden-ssh.sh && /tmp/harden-ssh.sh '$MANAGEMENT_IP' && rm -f /tmp/harden-ssh.sh"
+  log "Stage 1/2: SSH + firewall hardening (Ansible)..."
+  OPEN_WEB_PORTS=true; $DOCKER_ROLE && OPEN_WEB_PORTS=false
+  SSH_HARDEN_VARS="$(jq -n --arg ip "$MANAGEMENT_IP" --argjson web "$OPEN_WEB_PORTS" '{ssh_harden_management_ip:$ip, ssh_harden_open_web_ports:$web}')"
+  ansible_run_playbook "playbooks/provisioning/ssh_harden.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$SSH_HARDEN_VARS" \
+    || die "ssh_harden Ansible role failed. Server id=$SERVER_ID ip=$PUBLIC_IP — investigate before retrying."
+  unset SSH_HARDEN_VARS
   ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo post-ssh-hardening-ok' >/dev/null 2>&1 \
     || die "SSH broke after the SSH/firewall hardening stage! Server id=$SERVER_ID ip=$PUBLIC_IP — use the BinaryLane console/recovery. (fail2ban was NOT yet touched, so the cause is in sshd_config or ufw.)"
   log "Stage 1/2 complete; SSH still reachable."
 
-  log "Stage 2/2: fail2ban..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/harden-fail2ban.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/harden-fail2ban.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/harden-fail2ban.sh && /tmp/harden-fail2ban.sh '$MANAGEMENT_IP' && rm -f /tmp/harden-fail2ban.sh"
+  log "Stage 2/2: fail2ban (Ansible)..."
+  FAIL2BAN_VARS="$(jq -n --arg ip "$MANAGEMENT_IP" '{fail2ban_harden_management_ip:$ip}')"
+  ansible_run_playbook "playbooks/provisioning/fail2ban_harden.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$FAIL2BAN_VARS" \
+    || die "fail2ban_harden Ansible role failed. Server id=$SERVER_ID ip=$PUBLIC_IP — SSH/ufw were confirmed fine, so this isolates fail2ban as the cause. Use the BinaryLane console/recovery."
+  unset FAIL2BAN_VARS
   ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo post-fail2ban-hardening-ok' >/dev/null 2>&1 \
     || die "SSH broke after the fail2ban stage! Server id=$SERVER_ID ip=$PUBLIC_IP — SSH/ufw were confirmed fine, so this isolates fail2ban as the cause. Use the BinaryLane console/recovery."
   log "Stage 2/2 complete; SSH still reachable."
 fi
 
 # ---------------------------------------------------------------------------
-# LAMP install, or standalone MySQL for --db-only servers
+# LAMP install, standalone MySQL for --db-only servers, or the Docker stack
+# for --role docker servers
 # ---------------------------------------------------------------------------
-LAMP_VERSIONS="" MYSQL_INSTALL_OUT="" DB_CREDS_DISPLAY=""
-if $DB_ONLY; then
-  log "Installing standalone MySQL (db-only server, restricted to: $DB_ALLOW_FROM)..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-mysql-standalone.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-mysql-standalone.sh"
-  MYSQL_INSTALL_OUT="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-mysql-standalone.sh && /tmp/install-mysql-standalone.sh '$DB_ALLOW_FROM' && rm -f /tmp/install-mysql-standalone.sh")"
+LAMP_VERSIONS="" MYSQL_INSTALL_OUT="" DB_CREDS_DISPLAY="" DOCKER_VERSIONS=""
+if $DOCKER_ROLE; then
+  log "Installing the Docker stack via Ansible (Docker, MariaDB, web$( $DOCKER_NPM && echo ", NPM"))..."
+  DOCKER_VARS="$(jq -n --argjson npm "$DOCKER_NPM" '{docker_static_host_npm:$npm}')"
+  ansible_run_playbook "playbooks/provisioning/docker_static_host.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$DOCKER_VARS" \
+    || die "docker_static_host Ansible playbook failed. Server id=$SERVER_ID ip=$PUBLIC_IP"
+  unset DOCKER_VARS
+  DOCKER_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'docker --version; docker compose version' 2>/dev/null)"
+  log "Docker stack installed."
+
+  docker_state_update "$NAME" \
+    '.role = "docker-static"
+     | .docker = {npm_installed:$npm, npm_admin_hostname:$na, npm_proxy_hostname:$np, sites:[], extra_ssh_key:$ek}
+     | .firewall = {cloudflare_443_enabled:false, cloudflare_ips_v4:[], cloudflare_ips_v6:[], extra_ips:[]}' \
+    --argjson npm "$DOCKER_NPM" --arg na "$NPM_ADMIN_HOSTNAME" --arg np "$NPM_PROXY_HOSTNAME" --arg ek "$EXTRA_SSH_KEY"
+
+  # Straight after install: Docker publishes NPM's 443 past ufw, so until
+  # this runs it's open to everyone.
+  FIREWALL_OK=false
+  if $DOCKER_NPM; then
+    log "Restricting NPM's published 443 to Cloudflare + trusted IPs..."
+    if "$HERE/bin/allow-cloudflare-ips.sh" "$NAME" ${TRUSTED_443:+--extra-ip "$TRUSTED_443"}; then
+      FIREWALL_OK=true
+    else
+      warn "Port-443 allow-list failed — NPM's 443 is OPEN TO EVERYONE until fixed. Re-run: $HERE/bin/allow-cloudflare-ips.sh $NAME"
+    fi
+  fi
+elif $DB_ONLY; then
+  log "Installing standalone MySQL via Ansible (db-only server, restricted to: $DB_ALLOW_FROM)..."
+  MYSQL_VARS="$(jq -n --arg ips "$DB_ALLOW_FROM" '{mysql_standalone_allowed_ips:$ips}')"
+  ansible_run_playbook "playbooks/provisioning/mysql_standalone.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$MYSQL_VARS" \
+    || die "mysql_standalone Ansible role failed"
+  unset MYSQL_VARS
   log "Standalone MySQL install complete."
+  MYSQL_INSTALL_OUT="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'mysql --version' 2>/dev/null || echo "unknown")"
   DB_CREDS_DISPLAY="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'sudo cat /etc/mysql-provisioning-credentials.env')" \
     || warn "Could not retrieve DB credentials for display — check manually via SSH: sudo cat /etc/mysql-provisioning-credentials.env"
 elif ! $SKIP_LAMP; then
-  log "Running install-lamp.sh remotely (this takes a few minutes)..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-lamp.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-lamp.sh"
-  LAMP_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-lamp.sh && /tmp/install-lamp.sh '$FQDN' '$SKIP_MYSQL' && rm -f /tmp/install-lamp.sh")"
+  log "Running the lamp_stack Ansible role (this takes a few minutes)..."
+  LAMP_VARS="$(jq -n --arg fqdn "$FQDN" --argjson skip_mysql "$SKIP_MYSQL" '{lamp_stack_welcome_fqdn:$fqdn, lamp_stack_skip_mysql:$skip_mysql}')"
+  ansible_run_playbook "playbooks/provisioning/lamp_stack.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$LAMP_VARS" \
+    || die "lamp_stack Ansible role failed"
+  unset LAMP_VARS
+  LAMP_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo "PHP: $(php -v | head -1)"; echo "Composer: $(composer --version 2>/dev/null | head -1)"; echo "Apache: $(apache2 -v | head -1)"' 2>/dev/null)"
   log "LAMP install complete."
 fi
 
@@ -424,7 +584,8 @@ fi
 TUNNEL_RECORD_ID="" DEDICATED_TUNNEL_ID="" TUNNEL_ZONE_ID=""
 if $CF_TUNNEL; then
   log "Provisioning dedicated Cloudflare Tunnel for $CF_HOSTNAME -> $PUBLIC_IP ..."
-  TUNNEL_OUT="$("$HERE/scripts/install-cloudflare-tunnel.sh" "$NAME" "$CF_HOSTNAME" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
+  TUNNEL_CONNECTOR=systemd; $DOCKER_ROLE && TUNNEL_CONNECTOR=docker
+  TUNNEL_OUT="$("$PROVISIONING_ROOT/common/install-cloudflare-tunnel.sh" "$NAME" "$CF_HOSTNAME" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TUNNEL_CONNECTOR")" || die "Cloudflare Tunnel provisioning failed"
   DEDICATED_TUNNEL_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ID=' | cut -d= -f2)"
   TUNNEL_RECORD_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_RECORD_ID=' | cut -d= -f2)"
   TUNNEL_ZONE_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ZONE_ID=' | cut -d= -f2)"
@@ -432,10 +593,33 @@ if $CF_TUNNEL; then
 fi
 
 # ---------------------------------------------------------------------------
+# --role docker: record the tunnel in state (lib/docker.sh drives ingress
+# from it), then add NPM's tunnel routes.
+# ---------------------------------------------------------------------------
+NPM_ADMIN_HTTPS="" TUNNEL_HTTPS=""
+if $DOCKER_ROLE; then
+  docker_state_update "$NAME" \
+    '.cloudflare += {tunnel_enabled:true, tunnel_hostname:$th, tunnel_dns_record_id:$tr, tunnel_id:$tid, tunnel_zone_id:$tz,
+                     tunnel_routes:[{hostname:$th, service:"http://web:80", zone_id:$tz, dns_record_id:$tr}]}' \
+    --arg th "$CF_HOSTNAME" --arg tr "$TUNNEL_RECORD_ID" --arg tid "$DEDICATED_TUNNEL_ID" --arg tz "$TUNNEL_ZONE_ID"
+  TUNNEL_ID="$DEDICATED_TUNNEL_ID"
+
+  if $DOCKER_NPM; then
+    log "Adding NPM tunnel routes..."
+    docker_route_upsert "$NAME" "$NPM_ADMIN_HOSTNAME" "http://npm:81"
+    docker_route_upsert "$NAME" "$NPM_PROXY_HOSTNAME" "http://npm:80"
+    NPM_ADMIN_HTTPS="$(docker_https_check "$NPM_ADMIN_HOSTNAME")"
+    log "NPM admin via tunnel (https://$NPM_ADMIN_HOSTNAME/): $NPM_ADMIN_HTTPS"
+  fi
+  TUNNEL_HTTPS="$(docker_https_check "$CF_HOSTNAME")"
+  log "Tunnel hostname check (https://$CF_HOSTNAME/): $TUNNEL_HTTPS (404 from the catch-all is expected until a site is added)"
+fi
+
+# ---------------------------------------------------------------------------
 # HTTP test (skipped for --db-only servers — no web server to test)
 # ---------------------------------------------------------------------------
 HTTP_OK=false HTTP_CODE=""
-if ! $DB_ONLY; then
+if ! $DB_ONLY && ! $DOCKER_ROLE; then
   HTTP_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$PUBLIC_IP/" || true)"
   [ "$HTTP_CODE" = "200" ] && HTTP_OK=true
   log "HTTP test (direct IP): $HTTP_CODE"
@@ -456,9 +640,10 @@ if $ENABLE_TLS; then
   elif ! $DNS_OK; then
     TLS_SKIPPED_REASON="DNS for $FQDN had not confirmed propagation — run manually once it has: ssh-server.sh $NAME -- sudo certbot --apache -d $FQDN --agree-tos --redirect"
   else
-    log "Requesting Let's Encrypt certificate for $FQDN..."
-    scp "${SSH_OPTS[@]}" "$HERE/scripts/install-certbot.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-certbot.sh"
-    if ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-certbot.sh && /tmp/install-certbot.sh '$FQDN' '$LETSENCRYPT_EMAIL' && rm -f /tmp/install-certbot.sh"; then
+    log "Requesting Let's Encrypt certificate for $FQDN via Ansible..."
+    CERTBOT_VARS="$(jq -n --arg fqdn "$FQDN" --arg email "$LETSENCRYPT_EMAIL" '{certbot_http01_fqdn:$fqdn, certbot_http01_email:$email}')"
+    if ansible_run_playbook "playbooks/provisioning/certbot_http01.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CERTBOT_VARS"; then
+      unset CERTBOT_VARS
       HTTPS_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://$FQDN/" || true)"
       if [ "$HTTPS_CODE" = "200" ]; then
         TLS_OK=true
@@ -488,7 +673,13 @@ for i in $(seq 1 20); do
 done
 if $REBOOT_OK; then
   log "SSH reachable after reboot."
-  if ! $DB_ONLY; then
+  if $DOCKER_ROLE; then
+    sleep 10
+    DOCKER_REBOOT_STATUS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'sudo docker ps --format "{{.Names}}: {{.Status}}"; systemctl is-active npm-443-fw-rules 2>/dev/null | sed "s/^/npm-443-fw-rules: /"' 2>/dev/null || echo unknown)"
+    log "After reboot:"; log "$DOCKER_REBOOT_STATUS"
+    POST_REBOOT_HTTPS="$(docker_https_check "$CF_HOSTNAME")"
+    log "Tunnel hostname after reboot: $POST_REBOOT_HTTPS"
+  elif ! $DB_ONLY; then
     POST_REBOOT_HTTP="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://$PUBLIC_IP/" || true)"
     log "HTTP after reboot: $POST_REBOOT_HTTP"
   else
@@ -512,7 +703,11 @@ ROLE="lamp"
 $DB_ONLY && ROLE="db-only"
 $SKIP_LAMP && ! $DB_ONLY && ROLE="base-os"
 $SKIP_MYSQL && ! $DB_ONLY && ! $SKIP_LAMP && ROLE="web-no-local-db"
-state_write "$NAME" "$(jq -n \
+$DOCKER_ROLE && ROLE="docker-static"
+# Merged over the existing state (recursive `*`) so fields written earlier
+# in the run by other scripts — tunnel_routes, docker, firewall — survive.
+EXISTING_STATE="$(cat "$(state_file "$NAME")")"
+state_write "$NAME" "$(jq -n --argjson existing "$EXISTING_STATE" \
   --arg name "$NAME" --arg fqdn "$FQDN" --argjson server_id "$SERVER_ID" \
   --arg region "$REGION" --arg plan "$PLAN" --argjson image_id "$IMAGE_ID" \
   --arg created "$NOW" --arg updated "$FINAL_NOW" --arg status "$FINAL_STATUS" \
@@ -521,11 +716,16 @@ state_write "$NAME" "$(jq -n \
   --argjson tunnel_enabled "$CF_TUNNEL" --arg tunnel_hostname "$CF_HOSTNAME" --arg tunnel_record_id "$TUNNEL_RECORD_ID" \
   --arg tunnel_id "$DEDICATED_TUNNEL_ID" --arg tunnel_zone_id "$TUNNEL_ZONE_ID" \
   --arg role "$ROLE" --argjson db_only "$DB_ONLY" --arg db_allow_from "$DB_ALLOW_FROM" \
+  --argjson beszel_enabled "$BESZEL_OK" --arg beszel_hub "$BESZEL_HUB_URL" \
+  --argjson tailscale_enabled "$TAILSCALE_OK" --arg tailscale_hostname "$TS_HOSTNAME" --arg tailscale_tag "$TAILSCALE_TAG" --arg tailscale_key_id "$TS_KEY_ID_USED" \
   '{name:$name, fqdn:$fqdn, binarylane_server_id:$server_id, region:$region, plan:$plan, image_id:$image_id,
     created_at:$created, updated_at:$updated, status:$status, public_ipv4:$ip, ssh_key_fingerprint:$fingerprint,
     role:$role,
     cloudflare:{zone_id:$zone_id, dns_record_id:$a_record_id, tunnel_enabled:$tunnel_enabled, tunnel_hostname:$tunnel_hostname, tunnel_dns_record_id:$tunnel_record_id, tunnel_id:$tunnel_id, tunnel_zone_id:$tunnel_zone_id},
-    mysql:{db_only:$db_only, allowed_from:$db_allow_from, credentials_file:(if $db_only then "/etc/mysql-provisioning-credentials.env" else null end)}}')"
+    mysql:{db_only:$db_only, allowed_from:$db_allow_from, credentials_file:(if $db_only then "/etc/mysql-provisioning-credentials.env" else null end)},
+    beszel:{enabled:$beszel_enabled, hub_url:(if $beszel_enabled then $beszel_hub else "" end)},
+    tailscale:{enabled:$tailscale_enabled, hostname:$tailscale_hostname, tag:$tailscale_tag, authkey_id:$tailscale_key_id}}
+   | $existing * .')"
 
 RECORD="$(record_file "$NAME")"
 {
@@ -581,6 +781,13 @@ RECORD="$(record_file "$NAME")"
   echo "Cloudflare Tunnel DNS Record ID:"; echo "$( $CF_TUNNEL && echo "$TUNNEL_RECORD_ID" || echo 'Not Configured' )"; echo
   echo
   echo "============================================================"
+  echo "Tailscale"
+  echo "============================================================"
+  echo
+  echo "Tailscale:"; echo "$( $TAILSCALE_OK && echo "Joined — hostname '$TS_HOSTNAME', tag $TAILSCALE_TAG, Tailscale SSH on" || echo "Not joined" )"; echo
+  echo "Beszel Monitoring:"; echo "$( $BESZEL_OK && echo "Agent connected to $BESZEL_HUB_URL (port $BESZEL_PORT)" || echo "Not installed" )"; echo
+  echo
+  echo "============================================================"
   echo "TLS (base FQDN — the tunnel hostname, if any, uses Cloudflare's edge TLS instead)"
   echo "============================================================"
   echo
@@ -591,7 +798,15 @@ RECORD="$(record_file "$NAME")"
   echo "============================================================"
   echo
   echo "Apache:"; echo "$( { $SKIP_LAMP || $DB_ONLY; } && echo 'Not Installed' || echo 'Installed / Running' )"; echo
-  if $DB_ONLY; then
+  if $DOCKER_ROLE; then
+    echo "Docker:"; echo "$DOCKER_VERSIONS"; echo
+    echo "MariaDB:"; echo "Running (container, backend network only, no published port; root password in ~/docker/mariadb/.env on the server)"; echo
+    echo "Web (nginx, static):"; echo "Running (container, no published port; sites added as vhosts: playbooks/provisioning/vhost_add.yml)"; echo
+    if $DOCKER_NPM; then
+      echo "Nginx Proxy Manager:"; echo "Running — admin https://$NPM_ADMIN_HOSTNAME/ (tunnel), proxy https://$NPM_PROXY_HOSTNAME/ (tunnel)"; echo
+      echo "NPM direct 443:"; echo "$( $FIREWALL_OK && echo "Restricted to Cloudflare ranges + trusted: ${TRUSTED_443:-<none>}" || echo "NOT RESTRICTED — run bin/allow-cloudflare-ips.sh $NAME" )"; echo
+    fi
+  elif $DB_ONLY; then
     echo "MySQL (standalone):"; echo "$MYSQL_INSTALL_OUT"
     echo "MySQL allowed from (ufw):"; echo "$DB_ALLOW_FROM"; echo
     echo "MySQL port:"; echo "3306"; echo
@@ -611,7 +826,7 @@ RECORD="$(record_file "$NAME")"
   echo "Provisioning Toolkit:"; echo "$HERE"; echo
   echo "Provisioning Status:"; echo "$FINAL_STATUS"; echo
   echo "Initial SSH Test:"; echo "$($SSH_OK && echo Passed || echo Failed)"; echo
-  echo "HTTP Test:"; echo "$( $DB_ONLY && echo "N/A (db-only server)" || ( $HTTP_OK && echo Passed || echo "Failed (code $HTTP_CODE)" ) )"; echo
+  echo "HTTP Test:"; echo "$( $DB_ONLY && echo "N/A (db-only server)" || { $DOCKER_ROLE && echo "N/A (docker role — tunnel check: $TUNNEL_HTTPS)"; } || ( $HTTP_OK && echo Passed || echo "Failed (code $HTTP_CODE)" ) )"; echo
   echo "DNS Test:"; echo "$($DNS_OK && echo Passed || echo "Not confirmed within timeout")"; echo
   echo "Reboot Test:"; echo "$($REBOOT_OK && echo Passed || echo Failed)"; echo
   echo "Last Provisioning Update:"; echo "$FINAL_NOW"; echo
@@ -631,7 +846,10 @@ Region / Plan:           $REGION / $PLAN
 Image:                    $IMAGE_FULLNAME
 Cloudflare DNS Record:   $A_RECORD_ID ($( [ "$CF_PROXY" = "on" ] && echo Proxied || echo "DNS Only" ))
 Cloudflare Tunnel:        $( $CF_TUNNEL && echo "Enabled ($CF_HOSTNAME)" || echo Disabled )
+Tailscale:                $( $TAILSCALE_OK && echo "Joined ($TS_HOSTNAME, $TAILSCALE_TAG)" || echo "Not joined" )
+Beszel:                   $( $BESZEL_OK && echo "Connected ($BESZEL_HUB_URL)" || echo "Not installed" )
 Let's Encrypt:            $( $TLS_OK && echo "https://$FQDN/" || echo "Not enabled" )
+$( $DOCKER_ROLE && $DOCKER_NPM && printf '%s\n' "NPM admin:                https://$NPM_ADMIN_HOSTNAME/ ($NPM_ADMIN_HTTPS) — set the admin login now" "NPM direct 443:           $( $FIREWALL_OK && echo "restricted (Cloudflare + ${TRUSTED_443:-no extra IPs})" || echo "NOT RESTRICTED" )" )
 SSH Command:              ssh -i $PROVISIONING_SSH_KEY $ADMIN_USER@$FQDN
 Provisioning Record:      $RECORD
 ============================================================

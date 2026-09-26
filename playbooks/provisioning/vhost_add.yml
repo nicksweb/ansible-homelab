@@ -1,0 +1,53 @@
+---
+# Add (or change) one vhost on one server, record it in
+# provisioning/inventory/host_vars/<server>/vhosts.yml, and converge:
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml \
+#     -l web01 -e vhost=shop.example.com
+#
+# Optional: -e service=http://grafana:3000 (docker servers: proxy to that
+# container instead of a static site), -e php=none|highest|8.3 (LAMP
+# servers; default highest), -e udm=false, -e takeover=true.
+# For bulk changes edit vhosts.yml directly and run vhosts.yml instead.
+- name: Add a vhost
+  hosts: provisioned
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Target exactly one server
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - vhost is defined and vhost is string
+        fail_msg: "Usage: -l <server> -e vhost=<hostname> (matched servers: {{ ansible_play_hosts_all | join(', ') }})"
+        quiet: true
+      run_once: true
+
+    - name: Build the entry
+      ansible.builtin.set_fact:
+        vhosts_entry: >-
+          {{ {'hostname': vhost | lower | trim}
+             | combine({'service': service} if service is defined else {})
+             | combine({'php': php | string} if php is defined else {})
+             | combine({'udm': udm | bool} if udm is defined else {})
+             | combine({'takeover': takeover | bool} if takeover is defined else {}) }}
+
+    - name: Add it to this run's vhosts, replacing any entry for the same hostname
+      ansible.builtin.set_fact:
+        vhosts: >-
+          {%- set out = [] -%}
+          {%- for v in vhosts -%}
+          {%-   set e = {'hostname': v} if v is string else v -%}
+          {%-   if (e.hostname | lower) != vhosts_entry.hostname -%}
+          {%-     set _ = out.append(v) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out + [vhosts_entry] }}
+
+    - name: Record it in the inventory
+      ansible.builtin.include_tasks: tasks/write_vhosts_file.yml
+      vars:
+        vhosts_file_list: "{{ vhosts }}"
+
+  roles:
+    - provisioning/vhosts

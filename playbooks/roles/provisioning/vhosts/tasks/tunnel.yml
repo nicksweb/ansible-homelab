@@ -1,0 +1,81 @@
+---
+# One dedicated tunnel per server, named <server>-tunnel. Docker servers get
+# theirs at provisioning; a LAMP server or Proxmox container provisioned
+# without one gets it here, with its first vhost.
+
+- name: Start from the tunnel recorded at provisioning
+  ansible.builtin.set_fact:
+    vhosts_tunnel_id: "{{ prov_tunnel_id }}"
+
+- name: Look up the tunnel by name
+  when: vhosts_tunnel_id | length == 0
+  delegate_to: localhost
+  become: false
+  block:
+    - name: "Find {{ prov_tunnel_name }}"
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/accounts/{{ vhosts_cf_account }}/cfd_tunnel?name={{ prov_tunnel_name }}&is_deleted=false"
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+      register: vhosts_tunnel_lookup
+      failed_when: false
+      no_log: true
+
+    - name: Tunnel lookup succeeded
+      ansible.builtin.assert:
+        that: vhosts_tunnel_lookup.status == 200
+        fail_msg: "Cloudflare tunnel lookup failed: HTTP {{ vhosts_tunnel_lookup.status }} {{ vhosts_tunnel_lookup.json.errors | default('') }}"
+        quiet: true
+
+    - name: Use it if it exists
+      ansible.builtin.set_fact:
+        vhosts_tunnel_id: "{{ (vhosts_tunnel_lookup.json.result | first | default({})).id | default('') }}"
+
+- name: Create the tunnel for this server's first vhost
+  when: vhosts_tunnel_id | length == 0 and vhosts_present | length > 0 and not vhosts_teardown
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Only an Apache server (LAMP or Proxmox) can be missing its tunnel
+      ansible.builtin.assert:
+        that: prov_role != 'docker-static'
+        fail_msg: "{{ inventory_hostname }} is a docker-static server without a tunnel id in state — its provisioning is incomplete."
+        quiet: true
+
+    - name: "Create {{ prov_tunnel_name }} (locally managed)"
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/accounts/{{ vhosts_cf_account }}/cfd_tunnel"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+        body_format: json
+        body:
+          name: "{{ prov_tunnel_name }}"
+          tunnel_secret: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') | b64encode }}"
+          config_src: local
+      register: vhosts_tunnel_create
+      failed_when: false
+      changed_when: true
+      no_log: true
+
+    - name: Tunnel creation succeeded
+      ansible.builtin.assert:
+        that: vhosts_tunnel_create.status == 200
+        fail_msg: "Cloudflare tunnel creation failed: HTTP {{ vhosts_tunnel_create.status }} {{ vhosts_tunnel_create.json.errors | default('') }}"
+        quiet: true
+
+    - name: Use the new tunnel
+      ansible.builtin.set_fact:
+        vhosts_tunnel_id: "{{ vhosts_tunnel_create.json.result.id }}"
+
+- name: Record the tunnel in the server's provisioning state, so destroy-container.sh deletes it
+  ansible.builtin.copy:
+    dest: "{{ prov_state_file }}"
+    content: >-
+      {{ lookup('ansible.builtin.file', prov_state_file) | from_json
+         | combine({'cloudflare': {'tunnel_enabled': true, 'tunnel_id': vhosts_tunnel_id, 'account_id': vhosts_cf_account}}, recursive=true)
+         | to_nice_json(indent=2, sort_keys=false) }}
+    mode: '0664'
+  delegate_to: localhost
+  become: false
+  when: prov_tunnel_id | length == 0 and vhosts_tunnel_id | length > 0 and not vhosts_teardown

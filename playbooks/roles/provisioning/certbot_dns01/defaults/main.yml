@@ -1,0 +1,15 @@
+---
+certbot_dns01_fqdn: ""
+certbot_dns01_email: ""
+certbot_dns01_additional_domains: []
+
+# Optional command certbot runs after every successful renewal of any cert
+# on this host (e.g. "systemctl reload apache2"), installed as
+# /etc/letsencrypt/renewal-hooks/deploy/<name>. Empty: no hook.
+certbot_dns01_deploy_hook_name: reload-web
+certbot_dns01_deploy_hook: ""
+
+# The Cloudflare API token used by certbot's DNS plugin. Secret — pass via
+# extra-vars file, not literal -e (see tailscale_join's defaults for the
+# rationale). Every task touching this is no_log: true.
+certbot_dns01_cf_token: ""

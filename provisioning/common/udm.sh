@@ -46,14 +46,27 @@ find_free_reservation_ip() {
   return 1
 }
 
+# udm_network_gateway_prefix <network_id> — echoes "<gateway> <prefix>"
+# from the network's ip_subnet (e.g. "172.16.1.254/23" -> "172.16.1.254 23";
+# UniFi stores the gateway address, not the network address, there).
+udm_network_gateway_prefix() {
+  local network_id="$1" subnet
+  subnet="$(udm_api GET "/proxy/network/api/s/${UDM_SITE}/rest/networkconf" | jq -r --arg id "$network_id" '.data[] | select(._id == $id) | .ip_subnet // empty')"
+  [ -n "$subnet" ] || return 1
+  echo "${subnet%/*} ${subnet#*/}"
+}
+
 # create_dhcp_reservation_and_dns <mac> <ip> <fqdn> <network_id> — creates a
-# fixed-IP reservation with a local DNS record in one client object. Echoes
+# fixed-IP reservation with a local DNS record in one client object.
+# local_dns_record_enabled is required: without it the UDM stores the
+# record but never serves it (names only resolved via DHCP hostname
+# registration, so static-IP containers got none — found 2026-09-24). Echoes
 # the new object's _id (needed for later deletion).
 create_dhcp_reservation_and_dns() {
   local mac="$1" ip="$2" fqdn="$3" network_id="$4"
   local payload result
   payload="$(jq -n --arg mac "$mac" --arg ip "$ip" --arg fqdn "$fqdn" --arg net "$network_id" \
-    '{mac:$mac, use_fixedip:true, fixed_ip:$ip, local_dns_record:$fqdn, network_id:$net}')"
+    '{mac:$mac, use_fixedip:true, fixed_ip:$ip, local_dns_record:$fqdn, local_dns_record_enabled:true, network_id:$net}')"
   result="$(udm_api POST "/proxy/network/api/s/${UDM_SITE}/rest/user" "$payload")" || die "Failed to create DHCP reservation + DNS record"
   echo "$result" | jq -r '.data[0]._id'
 }

@@ -1,0 +1,135 @@
+---
+- name: Compute the webroot and vhost path
+  # The PHP facts are reset too: they would otherwise carry over from the
+  # previous vhost when this role is included in a loop.
+  ansible.builtin.set_fact:
+    site_vhost_effective_webroot: "/var/www/html/sites/{{ site_vhost_hostname }}/public"
+    site_vhost_file: "/etc/apache2/vhosts.d/{{ site_vhost_hostname }}.conf"
+    site_vhost_php_socket: ""
+    site_vhost_php_version: ""
+
+- name: Check whether the webroot already exists
+  ansible.builtin.stat:
+    path: "{{ site_vhost_effective_webroot }}"
+  register: site_vhost_webroot_stat
+
+- name: Create the webroot and welcome page
+  # Content-creation is skip-if-exists (matching the original script) —
+  # re-running this role never clobbers a site's actual deployed content.
+  when: not site_vhost_webroot_stat.stat.exists
+  become: true
+  block:
+    - name: Create the webroot
+      ansible.builtin.file:
+        path: "{{ site_vhost_effective_webroot }}"
+        state: directory
+        mode: '0755'
+
+    - name: Write the welcome page (static)
+      ansible.builtin.template:
+        src: welcome_page.html.j2
+        dest: "{{ site_vhost_effective_webroot }}/index.html"
+        mode: '0644'
+      when: site_vhost_php == "none"
+
+    - name: Write the welcome page (PHP)
+      ansible.builtin.template:
+        src: welcome_page.php.j2
+        dest: "{{ site_vhost_effective_webroot }}/index.php"
+        mode: '0644'
+      when: site_vhost_php != "none"
+
+    - name: Set ownership on the site directory
+      ansible.builtin.file:
+        path: "/var/www/html/sites/{{ site_vhost_hostname }}"
+        owner: www-data
+        group: www-data
+        recurse: true
+
+- name: Resolve the highest installed PHP-FPM version
+  when: site_vhost_php == "highest"
+  block:
+    - name: Find PHP-FPM sockets
+      ansible.builtin.find:
+        paths: /run/php
+        patterns: "php[0-9]*-fpm.sock"
+        # find's file_type defaults to "file", which excludes unix domain
+        # sockets — confirmed directly: with the default, this task matched
+        # 0 of 3 examined entries even though php8.3-fpm.sock was present,
+        # silently breaking every "highest" PHP-FPM resolution downstream.
+        file_type: any
+      register: site_vhost_php_sockets
+
+    - name: Pick the highest version
+      ansible.builtin.set_fact:
+        site_vhost_php_version: >-
+          {{ (site_vhost_php_sockets.files | map(attribute='path')
+              | map('regex_replace', '.*/php([0-9]+\.[0-9]+)-fpm\.sock', '\1') | list | sort(attribute=None))[-1] }}
+      when: site_vhost_php_sockets.matched > 0
+
+- name: Use the explicitly given PHP version
+  ansible.builtin.set_fact:
+    site_vhost_php_version: "{{ site_vhost_php }}"
+  when: site_vhost_php != "none" and site_vhost_php != "highest"
+
+- name: Determine the PHP-FPM socket path
+  ansible.builtin.set_fact:
+    site_vhost_php_socket: "/run/php/php{{ site_vhost_php_version }}-fpm.sock"
+  when: site_vhost_php != "none" and site_vhost_php_version | length > 0
+
+- name: Confirm the PHP-FPM socket actually exists
+  ansible.builtin.stat:
+    path: "{{ site_vhost_php_socket }}"
+  register: site_vhost_php_socket_stat
+  when: site_vhost_php != "none"
+
+- name: Fail if no matching PHP-FPM socket was found
+  ansible.builtin.fail:
+    msg: "No PHP-FPM socket found for version '{{ site_vhost_php_version or 'unknown' }}' (looked for {{ site_vhost_php_socket or 'n/a' }})"
+  when: site_vhost_php != "none" and not (site_vhost_php_socket_stat.stat.exists | default(false))
+
+- name: Check whether the vhost already exists
+  ansible.builtin.stat:
+    path: "{{ site_vhost_file }}"
+  register: site_vhost_file_stat
+
+- name: Write the vhost
+  # Skip-if-exists, matching the original script — re-running with a
+  # different PHP version does NOT update an already-written vhost (a
+  # documented limitation of the original, preserved here rather than
+  # silently changed).
+  ansible.builtin.template:
+    src: vhosts_d.conf.j2
+    dest: "{{ site_vhost_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: not site_vhost_file_stat.stat.exists
+  notify: "reload apache2"
+
+- name: Check for this hostname's certificate
+  ansible.builtin.stat:
+    path: "{{ site_vhost_cert_dir }}/fullchain.pem"
+  register: site_vhost_d_cert
+  become: true
+  when: site_vhost_ssl
+
+- name: Enable mod_ssl
+  community.general.apache2_module:
+    name: ssl
+    state: present
+  become: true
+  when: site_vhost_ssl and site_vhost_d_cert.stat.exists
+  notify: "reload apache2"
+
+- name: Write the HTTPS vhost (managed — rewritten if the cert or PHP version changes)
+  ansible.builtin.template:
+    src: vhosts_d_ssl.conf.j2
+    dest: "/etc/apache2/vhosts.d/{{ site_vhost_hostname }}-ssl.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: site_vhost_ssl and site_vhost_d_cert.stat.exists
+  notify: "reload apache2"

@@ -1,0 +1,18 @@
+---
+# Tailscale's own hostname for this device (what --hostname is set to).
+tailscale_join_hostname: "{{ inventory_hostname }}"
+
+# Pre-authorized, tagged authkey minted by the control-host orchestrator's
+# own Tailscale API call. Not defaulted — must be supplied by the caller,
+# ideally via `--extra-vars @tmpfile.json` rather than literal -e on the
+# command line (see group_vars/provisioning/vault.yml comments / the plan
+# doc for why: -e is visible in `ps` for the process lifetime, a file that
+# gets deleted right after isn't). Every task that touches this value in
+# this role is no_log: true.
+tailscale_join_authkey: ""
+
+# Use MagicDNS. With systemd-resolved this only routes the tailnet's own
+# domain (*.<tailnet>.ts.net) to 100.100.100.100; every other lookup keeps
+# using the host's normal resolvers. BinaryLane servers turn it on so the
+# Beszel agent can reach the hub by its tailnet name.
+tailscale_join_accept_dns: false

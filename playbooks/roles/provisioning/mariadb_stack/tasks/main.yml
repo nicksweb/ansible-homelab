@@ -1,0 +1,263 @@
+---
+# Deploys a Docker Compose stack (MariaDB + phpMyAdmin + Traefik) plus a
+# native nginx in front of it for TLS termination on the container's own
+# trusted cert.
+#
+#   LAN client --HTTPS--> nginx :443 --http--> Traefik :8080 (127.0.0.1 only)
+#                                                  |
+#                                              phpMyAdmin --> MariaDB (Docker network)
+#
+#   Any host on the LAN --3306/tcp--> MariaDB directly (a Docker-published
+#     port, so ufw never sees it — restricted in DOCKER-USER instead, below)
+#
+# HIGHEST-RISK role in this build, built last for exactly that reason.
+# Two things are ported exactly rather than "improved":
+#   1. Credential-preserve-on-rerun (.env read back if present) — same
+#      rationale as mysql_standalone.
+#   2. The DOCKER-USER iptables firewall stays a generated shell script +
+#      systemd oneshot unit, NOT declarative per-rule Ansible tasks — the
+#      ordering (3 idempotent ACCEPT inserts, then one DROP append that
+#      must stay last) is load-bearing, and the DOCKER-USER chain doesn't
+#      exist until dockerd creates it, so it must be re-applied on every
+#      boot via the systemd unit, not just once at provisioning time.
+
+- name: Require an fqdn
+  ansible.builtin.assert:
+    that: mariadb_stack_fqdn | length > 0
+    fail_msg: mariadb_stack_fqdn is required.
+
+- name: Resolve the connecting user's HOME
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: sh -c 'echo $HOME'
+  register: mariadb_stack_home
+  changed_when: false
+  when: mariadb_stack_dir | length == 0
+
+- name: Set the effective stack directory
+  ansible.builtin.set_fact:
+    mariadb_stack_effective_dir: "{{ mariadb_stack_dir if mariadb_stack_dir | length > 0 else mariadb_stack_home.stdout + '/docker/mariadb-stack' }}"
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ mariadb_stack_effective_dir }}"
+    - "{{ mariadb_stack_effective_dir }}/data"
+
+- name: Create the MariaDB data directory
+  # No mode, no recurse: the MariaDB container owns these files (uid 999,
+  # 660). A recursive chmod here rewrote every data file to 0755 on
+  # re-runs against a live server.
+  ansible.builtin.file:
+    path: "{{ mariadb_stack_effective_dir }}/data/mariadb"
+    state: directory
+
+- name: Check for an existing .env
+  ansible.builtin.stat:
+    path: "{{ mariadb_stack_effective_dir }}/.env"
+  register: mariadb_stack_env_stat
+
+- name: Read back existing credentials
+  when: mariadb_stack_env_stat.stat.exists
+  no_log: true
+  block:
+    - name: Slurp the existing .env
+      ansible.builtin.slurp:
+        src: "{{ mariadb_stack_effective_dir }}/.env"
+      register: mariadb_stack_env_raw
+
+    - name: Parse existing credentials
+      ansible.builtin.set_fact:
+        mariadb_stack_root_password: "{{ (mariadb_stack_env_raw.content | b64decode) | regex_search('MYSQL_ROOT_PASSWORD=(.*)', '\\1') | first }}"
+        mariadb_stack_app_password: "{{ (mariadb_stack_env_raw.content | b64decode) | regex_search('MYSQL_PASSWORD=(.*)', '\\1') | first }}"
+        mariadb_stack_effective_db_name: "{{ (mariadb_stack_env_raw.content | b64decode) | regex_search('MYSQL_DATABASE=(.*)', '\\1') | first }}"
+        mariadb_stack_effective_db_user: "{{ (mariadb_stack_env_raw.content | b64decode) | regex_search('MYSQL_USER=(.*)', '\\1') | first }}"
+
+- name: Generate new credentials
+  when: not mariadb_stack_env_stat.stat.exists
+  no_log: true
+  block:
+    - name: Generate the root password
+      check_mode: false  # read-only probe; later tasks need its output in --check too
+      ansible.builtin.command: "sh -c \"openssl rand -base64 24 | tr -dc 'A-Za-z0-9'\""
+      register: mariadb_stack_new_root_pw
+      changed_when: false
+
+    - name: Generate the app password
+      check_mode: false  # read-only probe; later tasks need its output in --check too
+      ansible.builtin.command: "sh -c \"openssl rand -base64 24 | tr -dc 'A-Za-z0-9'\""
+      register: mariadb_stack_new_app_pw
+      changed_when: false
+
+    - name: Set the generated credentials as facts
+      ansible.builtin.set_fact:
+        mariadb_stack_root_password: "{{ mariadb_stack_new_root_pw.stdout }}"
+        mariadb_stack_app_password: "{{ mariadb_stack_new_app_pw.stdout }}"
+        mariadb_stack_effective_db_name: "{{ mariadb_stack_db_name }}"
+        mariadb_stack_effective_db_user: "{{ mariadb_stack_db_user }}"
+
+- name: Write .env
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ mariadb_stack_effective_dir }}/.env"
+    mode: '0600'
+  no_log: true
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ mariadb_stack_effective_dir }}/docker-compose.yml"
+    mode: '0644'
+
+- name: Write the firewall rules script
+  ansible.builtin.template:
+    src: mariadb-fw-rules.sh.j2
+    dest: /usr/local/sbin/mariadb-fw-rules.sh
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Install the firewall rules systemd unit
+  ansible.builtin.template:
+    src: mariadb-fw-rules.service.j2
+    dest: /etc/systemd/system/mariadb-fw-rules.service
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  register: mariadb_stack_fw_unit
+
+- name: Reload systemd and enable the firewall rules unit
+  ansible.builtin.systemd:
+    name: mariadb-fw-rules.service
+    daemon_reload: "{{ mariadb_stack_fw_unit.changed }}"
+    enabled: true
+  become: true
+
+- name: Check whether nginx is already installed
+  ansible.builtin.stat:
+    path: /usr/sbin/nginx
+  register: mariadb_stack_nginx_present
+
+- name: Install nginx
+  when: not mariadb_stack_nginx_present.stat.exists
+  become: true
+  block:
+    - name: apt update
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+- name: Open ufw for HTTP/HTTPS
+  # nginx runs natively on the host, so ufw does apply here — unlike
+  # Docker's published ports, which bypass ufw entirely (see the header
+  # note and mariadb-fw-rules.sh for why 3306 needs the DOCKER-USER chain
+  # instead).
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ['80', '443']
+  become: true
+
+- name: Set the cert directory
+  ansible.builtin.set_fact:
+    mariadb_stack_cert_dir: "/etc/letsencrypt/live/{{ mariadb_stack_fqdn }}"
+
+- name: Require a certificate to already exist
+  ansible.builtin.stat:
+    path: "{{ mariadb_stack_cert_dir }}/fullchain.pem"
+  become: true
+  register: mariadb_stack_cert_stat
+
+- name: Fail if no certificate exists yet
+  ansible.builtin.fail:
+    msg: >-
+      No certificate found at {{ mariadb_stack_cert_dir }} — run the
+      certbot_dns01 role for {{ mariadb_stack_fqdn }} first.
+  when: not mariadb_stack_cert_stat.stat.exists
+
+- name: Write the nginx vhost
+  ansible.builtin.template:
+    src: nginx-mariadb-stack.conf.j2
+    dest: /etc/nginx/sites-available/mariadb-stack.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Enable the nginx vhost
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/mariadb-stack.conf
+    dest: /etc/nginx/sites-enabled/mariadb-stack.conf
+    state: link
+  become: true
+
+- name: Remove the default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  become: true
+
+- name: Validate the nginx config
+  ansible.builtin.command: nginx -t
+  become: true
+  changed_when: false
+
+- name: Enable and reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: reloaded
+  become: true
+
+- name: Apply the firewall rules now (not just at next boot)
+  ansible.builtin.command: /usr/local/sbin/mariadb-fw-rules.sh
+  become: true
+  changed_when: true
+
+- name: Start the Docker Compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ mariadb_stack_effective_dir }}"
+    state: present
+  become: true
+  register: mariadb_stack_compose_result
+
+- name: Wait for MariaDB to report healthy
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: >
+    docker inspect --format "{{ '{{' }}.State.Health.Status{{ '}}' }}"
+    mariadb-stack-mariadb-1
+  become: true
+  register: mariadb_stack_health
+  until: mariadb_stack_health.stdout == "healthy"
+  retries: 30
+  delay: 5
+  changed_when: false
+  failed_when: false
+
+- name: Warn if MariaDB never reported healthy
+  ansible.builtin.debug:
+    msg: "MariaDB did not report healthy within 150s — check 'docker compose logs mariadb' on the target."
+  when: mariadb_stack_health.stdout != "healthy"
+
+- name: Report stack status
+  check_mode: false  # read-only probe; later tasks need its output in --check too
+  ansible.builtin.command: docker compose ps
+  args:
+    chdir: "{{ mariadb_stack_effective_dir }}"
+  become: true
+  register: mariadb_stack_status
+  changed_when: false
+
+- name: Show stack status
+  ansible.builtin.debug:
+    var: mariadb_stack_status.stdout_lines

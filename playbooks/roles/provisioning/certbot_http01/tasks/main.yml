@@ -1,0 +1,54 @@
+---
+# Issues a real Let's Encrypt certificate for the server's own base FQDN via
+# HTTP-01 (the apache plugin). Never the Cloudflare Tunnel hostname — that
+# already gets TLS for free at Cloudflare's edge and isn't reachable
+# directly by an HTTP-01 challenge anyway. Ported from
+# provisioning/binarylane/scripts/install-certbot.sh.
+#
+# Deliberate improvement over the original: that script relies on certbot
+# already being installed by install-lamp.sh (an undocumented cross-script
+# dependency). This role installs it explicitly — apt install is cheap and
+# idempotent, so there's no real cost to making the dependency self-
+# contained instead of implicit.
+
+- name: Require an fqdn
+  ansible.builtin.assert:
+    that: certbot_http01_fqdn | length > 0
+    fail_msg: certbot_http01_fqdn is required.
+
+- name: Install certbot and the Apache plugin
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - python3-certbot-apache
+    state: present
+  become: true
+
+- name: Check whether a certificate already exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ certbot_http01_fqdn }}/fullchain.pem"
+  become: true
+  register: certbot_http01_existing_cert
+
+- name: Request and install the certificate
+  when: not certbot_http01_existing_cert.stat.exists
+  become: true
+  block:
+    - name: Run certbot (HTTP-01 via the apache plugin)
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['certbot', '--apache', '-d', certbot_http01_fqdn, '--non-interactive', '--agree-tos', '--redirect']
+            + (['-m', certbot_http01_email, '--no-eff-email'] if certbot_http01_email | length > 0
+               else ['--register-unsafely-without-email'])
+          }}
+      changed_when: true
+
+    - name: Validate the Apache config
+      ansible.builtin.command: apache2ctl configtest
+      changed_when: false
+
+    - name: Reload Apache
+      ansible.builtin.systemd:
+        name: apache2
+        state: reloaded

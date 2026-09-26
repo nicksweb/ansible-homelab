@@ -1,0 +1,11 @@
+---
+mariadb_stack_fqdn: ""
+
+# Resolved from the connecting user's own $HOME at task time if left
+# empty (see tasks/main.yml) — matches the original script's $HOME/docker/mariadb-stack.
+mariadb_stack_dir: ""
+
+mariadb_stack_allowed_cidr: "172.16.0.0/16"
+mariadb_stack_db_port: 3306
+mariadb_stack_db_name: appdb
+mariadb_stack_db_user: appuser

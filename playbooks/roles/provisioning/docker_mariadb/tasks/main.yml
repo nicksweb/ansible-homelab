@@ -1,0 +1,70 @@
+---
+# MariaDB as a container on the shared `backend` network with NO published
+# host port — only other containers on `backend` can reach it, by name, so
+# the ufw-vs-Docker published-port problem never arises. Ported from
+# server-provisioning's scripts/install-mariadb-docker.sh.
+#
+# No database is created: docker-role servers start out serving static
+# sites. Root credentials are generated once into .env on the server (mode
+# 600) and read back on re-runs rather than rotated.
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - "{{ docker_mariadb_dir }}"
+    - "{{ docker_mariadb_dir }}/data"
+
+- name: Check for an existing .env
+  ansible.builtin.stat:
+    path: "{{ docker_mariadb_dir }}/.env"
+  register: docker_mariadb_env_stat
+
+- name: Read back the existing root password
+  when: docker_mariadb_env_stat.stat.exists
+  no_log: true
+  block:
+    - name: Slurp the existing .env
+      ansible.builtin.slurp:
+        src: "{{ docker_mariadb_dir }}/.env"
+      register: docker_mariadb_env_raw
+
+    - name: Parse the existing root password
+      ansible.builtin.set_fact:
+        docker_mariadb_root_password: "{{ (docker_mariadb_env_raw.content | b64decode) | regex_search('MYSQL_ROOT_PASSWORD=(.*)', '\\1') | first }}"
+
+- name: Generate a root password
+  # Generated on the controller into memory only (/dev/null as the password
+  # "file" means Ansible never persists it there).
+  ansible.builtin.set_fact:
+    docker_mariadb_root_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=32') }}"
+  when: not docker_mariadb_env_stat.stat.exists
+  no_log: true
+
+- name: Write .env
+  ansible.builtin.copy:
+    dest: "{{ docker_mariadb_dir }}/.env"
+    content: "MYSQL_ROOT_PASSWORD={{ docker_mariadb_root_password }}\n"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0600'
+  no_log: true
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ docker_mariadb_dir }}/docker-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Start MariaDB and wait for it to report healthy
+  community.docker.docker_compose_v2:
+    project_src: "{{ docker_mariadb_dir }}"
+    state: present
+    wait: true
+    wait_timeout: 180

@@ -1,0 +1,14 @@
+---
+docker_web_static_dir: "/home/{{ ansible_user }}/docker/web"
+docker_web_static_image: "nginx:stable"
+docker_web_static_network: frontend
+
+# Every static site this server hosts, as bare FQDNs. Each gets a webroot
+# under sites/<fqdn>/ (with a placeholder index.html only if the webroot is
+# new — deployed content is never overwritten) and a conf.d/<fqdn>.conf.
+# Sites dropped from this list are left in place, not deleted.
+docker_web_static_sites: []
+
+# Sites to stop serving: their conf.d entry is removed, their content under
+# sites/<fqdn>/ is kept.
+docker_web_static_sites_absent: []

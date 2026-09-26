@@ -1,0 +1,15 @@
+---
+# The dedicated Cloudflare Tunnel ID this container/server already has
+# cloudflared installed and running for (created by the control-host API
+# orchestration in provisioning/*/scripts/install-cloudflare-tunnel.sh
+# before this role ever runs).
+tunnel_ingress_tunnel_id: ""
+
+# Full desired list of public hostnames this tunnel should route — always
+# the complete list, not just what's being added this run. Every hostname
+# routes to the same local origin (tunnel_ingress_service); per-hostname
+# content differentiation happens in Apache vhosts (see the site_vhost
+# role), not in cloudflared. Empty leaves only the catch-all 404.
+tunnel_ingress_hostnames: []
+
+tunnel_ingress_service: "http://localhost:80"

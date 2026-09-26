@@ -1,0 +1,19 @@
+---
+container_bootstrap_fqdn: ""
+container_bootstrap_timezone: "Australia/Brisbane"
+container_bootstrap_admin_user: "localadmin"
+container_bootstrap_ssh_public_key: ""
+
+container_bootstrap_packages:
+  - curl
+  - wget
+  - git
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - unattended-upgrades
+  - jq
+  - ufw
+  - htop
+  - bwm-ng
+  - vnstat

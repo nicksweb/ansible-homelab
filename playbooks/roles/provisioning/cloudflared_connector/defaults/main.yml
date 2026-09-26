@@ -1,0 +1,15 @@
+---
+cloudflared_connector_tunnel_id: ""
+
+# The single hostname this tunnel routes at first-install time. Adding
+# further hostnames later is the tunnel_ingress role's job (full-rewrite
+# from a complete list), not this one's.
+cloudflared_connector_hostname: ""
+
+# The tunnel's connector token, fetched by the control-host orchestrator's
+# own Cloudflare API call. Not defaulted — see tailscale_join's defaults
+# for the same secret-passthrough rationale (extra-vars file, not literal
+# -e; every task touching this is no_log: true).
+cloudflared_connector_token: ""
+
+cloudflared_connector_service: "http://localhost:80"

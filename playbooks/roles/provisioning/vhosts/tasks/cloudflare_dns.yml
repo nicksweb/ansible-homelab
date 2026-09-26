@@ -1,0 +1,7 @@
+---
+- name: Public DNS per vhost
+  ansible.builtin.include_tasks: cf_record.yml
+  loop: "{{ vhosts_list }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }} ({{ vhosts_item.state }})"
