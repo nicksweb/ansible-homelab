@@ -1,9 +1,14 @@
 ---
 # Deploys a Docker Compose stack (MariaDB + phpMyAdmin + Traefik) plus a
 # native nginx in front of it for TLS termination on the container's own
-# trusted cert. Ported from
-# provisioning/proxmox/scripts/install-mariadb-stack.sh — see that file's
-# header for the full architecture diagram.
+# trusted cert.
+#
+#   LAN client --HTTPS--> nginx :443 --http--> Traefik :8080 (127.0.0.1 only)
+#                                                  |
+#                                              phpMyAdmin --> MariaDB (Docker network)
+#
+#   Any host on the LAN --3306/tcp--> MariaDB directly (a Docker-published
+#     port, so ufw never sees it — restricted in DOCKER-USER instead, below)
 #
 # HIGHEST-RISK role in this build, built last for exactly that reason.
 # Two things are ported exactly rather than "improved":

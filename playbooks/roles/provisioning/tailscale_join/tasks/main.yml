@@ -1,9 +1,12 @@
 ---
 # Installs Tailscale and joins the tailnet using a pre-authorized, tagged
-# authkey minted by the control-host orchestrator. Ported from
-# provisioning/common/install-tailscale.sh — see that file's header for the
-# secret-handling rationale (never on the control host's disk, never in
-# argv/ps on the target, shredded after use).
+# authkey minted by the control-host orchestrator.
+#
+# Secret handling: the authkey arrives in a mode-600 extra-vars file that
+# the orchestrator deletes as soon as ansible-playbook returns (never
+# literal -e, which shows in `ps`). On the target it's written briefly to a
+# root-only file for `tailscale up --authkey=file:...` — so it never
+# appears in argv — and shredded straight after.
 
 - name: Require an authkey
   ansible.builtin.assert:

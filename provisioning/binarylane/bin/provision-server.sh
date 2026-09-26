@@ -439,7 +439,7 @@ done
 $SSH_OK || die "Could not establish SSH as $ADMIN_USER within the timeout. Server id=$SERVER_ID, ip=$PUBLIC_IP — investigate via BinaryLane console before retrying."
 log "SSH confirmed as $ADMIN_USER."
 
-# Second independent session, per hardening safety requirement, before we let harden-ssh.sh touch sshd.
+# Second independent session, per hardening safety requirement, before we let the ssh_harden role touch sshd.
 ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo second-session-ok' >/dev/null 2>&1 \
   || die "Second SSH session check failed — refusing to run hardening. Investigate before retrying."
 log "Second SSH session confirmed — safe to proceed with hardening."

@@ -6,7 +6,7 @@
 # incremental-update path), so widening access on a live db-only server goes
 # through this script instead. Idempotent: re-running with the same IPs is a
 # no-op; the existing (and any new) IPs are always re-passed in full to
-# install-mysql-standalone.sh / install-phpmyadmin.sh, both of which are
+# the mysql_standalone / phpmyadmin Ansible roles, both of which are
 # themselves idempotent per-IP.
 #
 # Usage: db-allow-ip.sh <name> <ip[,ip...]> [--phpmyadmin]

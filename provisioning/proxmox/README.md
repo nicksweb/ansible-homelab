@@ -93,8 +93,8 @@ provisioning/
 │   ├── ssh.sh                     # SSH multiplexing, wait_for_ssh()
 │   ├── cloudflare.sh              # cf_api(), zone resolution, tunnel create/reuse
 │   ├── udm.sh                     # udm_api(), DHCP reservation + local DNS record
-│   ├── install-cloudflared-remote.sh
-│   └── install-beszel-agent.sh
+│   ├── ansible.sh                 # ansible_run_playbook() — hands on-server work to Ansible
+│   └── install-cloudflare-tunnel.sh # creates/reuses the tunnel (control host), then Ansible
 └── proxmox/
     ├── bin/
     │   ├── provision-container.sh
@@ -102,17 +102,14 @@ provisioning/
     │   ├── add-vhost.sh                 # attach another public hostname to an existing container
     │   └── deploy-mariadb-stack.sh      # deploy the MariaDB/phpMyAdmin/Traefik stack
     ├── lib/common.sh              # config, credentials, pve_api()
-    ├── scripts/                   # copied to the container and run there over ssh
-    │   ├── bootstrap-container.sh       # admin user + base packages
-    │   ├── install-cloudflare-tunnel.sh # orchestrates the tunnel (runs on the control host)
-    │   ├── update-tunnel-ingress.sh
-    │   ├── install-https-dns01.sh       # DNS-01 cert issuance
-    │   ├── install-test-vhost.sh        # minimal Apache welcome page(s)
-    │   ├── install-docker.sh
-    │   └── install-mariadb-stack.sh
     ├── state/                     # per-container JSON, gitignored
     └── config.example.env         # copy to config.env (gitignored) and edit
 ```
+
+Everything that runs *on* the container is an Ansible role under
+`playbooks/roles/provisioning/` (container_bootstrap, certbot_dns01,
+site_vhost, tunnel_ingress, docker_engine, mariadb_stack, tailscale_join,
+beszel_agent, ...), invoked through `common/ansible.sh`.
 
 ## Provisioning a container
 
@@ -155,7 +152,7 @@ plan and asks for confirmation before creating anything (`--yes` to skip,
 3. Creates an unprivileged LXC (`start=1`, `onboot=1`) with a pre-generated
    MAC address, for the DHCP reservation step below.
 4. Waits for a DHCP lease, then SSH as `root` (the template's only account)
-   and runs `bootstrap-container.sh`: creates the admin user (sudo,
+   and runs the `container_bootstrap` role: creates the admin user (sudo,
    `NOPASSWD`, SSH key installed, password locked), updates packages,
    installs base tooling (`curl wget git jq ufw htop bwm-ng vnstat` +
    `unattended-upgrades`), sets timezone/hostname, opens SSH in `ufw`.
@@ -212,20 +209,20 @@ An internal-only domain (like `in.example.com`) is never publicly
 resolvable, so Let's Encrypt's standard **HTTP-01** validation can never
 work for it. **DNS-01** solves this by proving domain control through a
 temporary TXT record via the Cloudflare API instead — works regardless of
-whether a public A record exists at all. `install-https-dns01.sh` handles
+whether a public A record exists at all. The `certbot_dns01` role handles
 this with `certbot` + `python3-certbot-dns-cloudflare`.
 
 Covers the public hostname too: when a LAN client reaches
 `--public-hostname` via the local DNS override, TLS terminates on the
 container itself (not at Cloudflare's edge), so the cert needs the public
-hostname as an extra SAN — `install-https-dns01.sh` checks the existing
+hostname as an extra SAN — the `certbot_dns01` role checks the existing
 cert's SANs first and expands rather than reissues.
 
 **Gotcha**: `certbot --expand` does **not** union the requested `-d` list
 with the cert's *existing* SANs — it replaces the domain list outright. A
 cert with SANs `{A, B}`, expanded with only `-d A -d C`, silently drops `B`.
 Always read the existing cert's SANs first and pass the full union
-(existing ∪ new) — `install-https-dns01.sh` and `add-vhost.sh` both do this.
+(existing ∪ new) — the `certbot_dns01` role does this.
 
 Credentials for the DNS-01 plugin live in `/etc/letsencrypt/cloudflare.ini`
 on the container itself (mode 600, root-only) — necessary for unattended
@@ -319,7 +316,7 @@ Any host on your LAN --3306/tcp--> MariaDB directly (plain Docker-published port
   iptables chain rather than `ufw` — Docker manipulates iptables directly
   and inserts its own `ACCEPT` rules ahead of anything `ufw` would apply, so
   a `ufw` rule alone would be silently ignored for Docker-published ports.
-  `install-mariadb-stack.sh` also allows the compose stack's own bridge
+  The `mariadb_stack` role also allows the compose stack's own bridge
   subnet through the same chain — without it, container-to-container
   traffic on the same Docker network gets caught by the same rule meant for
   external sources (phpMyAdmin's own connection to MariaDB would otherwise

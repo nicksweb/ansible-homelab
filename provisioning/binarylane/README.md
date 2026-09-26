@@ -90,10 +90,10 @@ before relying on the hostname.
 across VM/container provisioning and BinaryLane systems, not a
 toolkit-specific generated key) is injected via cloud-init. If it doesn't
 exist yet, generate it first: `ssh-keygen -t ed25519 -f ~/.ssh/cipi`.
-Password SSH and root login are disabled by `scripts/harden-ssh.sh` only
+Password SSH and root login are disabled by the `ssh_harden` role only
 after a second, independent SSH session has confirmed key auth works —
 hardening never runs blind. It runs in two externally-verified stages
-(`harden-ssh.sh` then `harden-fail2ban.sh`), with a reachability check after
+(`ssh_harden` then `fail2ban_harden`), with a reachability check after
 each, so a lockout is caught immediately after the specific change that
 caused it.
 
@@ -268,7 +268,7 @@ re-applies — safe to run repeatedly, including for IPv6 ranges on a server
 that doesn't have IPv6 enabled yet (the rules are just inert until it does).
 phpMyAdmin connects over the local Unix socket (no new MySQL grant needed);
 enabling it also replaces the from-anywhere `ufw allow 80/443` rules that
-`harden-ssh.sh` leaves on every server with rules scoped to the same
+`ssh_harden` leaves on every server with rules scoped to the same
 allow-list as MySQL.
 
 Every server this toolkit creates has `ipv6: false` — no IPv6 address at

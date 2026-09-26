@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the Docker Compose MariaDB + phpMyAdmin + Traefik stack (fronted by
 # a native nginx doing TLS termination) onto an already-provisioned
-# container. See scripts/install-mariadb-stack.sh for the architecture and
-# the DOCKER-USER firewall rationale.
+# container, via the mariadb_stack Ansible role — see its tasks/main.yml for
+# the architecture and the DOCKER-USER firewall rationale.
 #
 # Usage: deploy-mariadb-stack.sh <hostname> [--dry-run] [--yes]
 #   <hostname>  an existing container's short name (e.g. db01) — must

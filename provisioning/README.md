@@ -34,12 +34,12 @@ Both share the same design:
   about to do and asks for confirmation (`--yes` to skip, `--dry-run` to
   just see the plan) before creating or deleting anything.
 
-`common/` holds helpers shared by the Proxmox toolkit (SSH multiplexing,
-Cloudflare API wrapper, UDM/UniFi API wrapper, structured logging, remote
-installers). The BinaryLane toolkit predates that split and keeps its own
-copies of the equivalent helpers under `binarylane/lib/` and
-`binarylane/scripts/` — deliberately left alone rather than merged, so
-changes to one can't destabilize the other.
+The bash scripts under `*/bin/` only orchestrate: cloud/Proxmox APIs,
+Cloudflare, the UDM, Tailscale keys and local state. Everything that runs
+*on* a server is an Ansible role under `playbooks/roles/provisioning/`,
+invoked through `common/ansible.sh`. `common/` holds the helpers both
+toolkits share (Cloudflare, UDM, Tailscale, SSH, logging, the Ansible
+runner); `binarylane/lib/` keeps the BinaryLane-specific ones.
 
 ## Getting started
 

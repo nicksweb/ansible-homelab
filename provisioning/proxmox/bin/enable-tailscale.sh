@@ -12,6 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/lib/common.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/tailscale.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: enable-tailscale.sh <hostname> [--dry-run] [--yes]}"
@@ -60,24 +62,23 @@ if ! $ASSUME_YES; then
   [[ "$CONFIRM" =~ ^[Yy]$ ]] || { log "Aborted by user."; exit 1; }
 fi
 
-ssh_opts "$PROVISIONING_SSH_KEY"
-
 log "Minting a tagged Tailscale authkey ($TAILSCALE_TAG) for $NAME..."
 load_tailscale_creds
 tailscale_mint_authkey "proxmox-$NAME"
 TS_KEY_ID_USED="$TS_KEY_ID"
 
-log "Installing Tailscale and joining the tailnet as '$NAME'..."
-scp "${SSH_OPTS[@]}" "$PROVISIONING_ROOT/common/install-tailscale.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-tailscale.sh"
+log "Installing Tailscale and joining the tailnet as '$NAME' via Ansible..."
+TAILSCALE_VARS="$(jq -n --arg host "$NAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key}')"
+unset TS_AUTH_KEY
 TAILSCALE_OK=false
-if printf '%s' "$TS_AUTH_KEY" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" "chmod +x /tmp/install-tailscale.sh && /tmp/install-tailscale.sh '$NAME' && rm -f /tmp/install-tailscale.sh"; then
+if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
   TAILSCALE_OK=true
   log "Tailscale joined."
 else
   warn "Tailscale install/join failed — revoking the unused authkey ($TS_KEY_ID_USED)."
   tailscale_revoke_key "$TS_KEY_ID_USED"
 fi
-unset TS_AUTH_KEY
+unset TAILSCALE_VARS
 
 $TAILSCALE_OK || die "Tailscale join failed — see output above."
 
