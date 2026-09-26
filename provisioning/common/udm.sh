@@ -47,7 +47,7 @@ find_free_reservation_ip() {
 }
 
 # udm_network_gateway_prefix <network_id> — echoes "<gateway> <prefix>"
-# from the network's ip_subnet (e.g. "172.16.1.254/23" -> "172.16.1.254 23";
+# from the network's ip_subnet (e.g. "192.168.1.1/24" -> "192.168.1.1 24";
 # UniFi stores the gateway address, not the network address, there).
 udm_network_gateway_prefix() {
   local network_id="$1" subnet
