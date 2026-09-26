@@ -159,19 +159,22 @@ since it belongs to exactly one server.
 
 ## Adding websites to a provisioned server
 
+Websites are **vhosts**, managed with Ansible for every server type — see
+[../README.md](../README.md#vhosts-ansible). From the repo root:
+
 ```bash
-./bin/add-site.sh webserver01 shop example.com 8.3
-./bin/add-site.sh webserver01 @ example.com php     # apex domain, highest installed PHP
-./bin/add-site.sh webserver02 status example.com none   # static site
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver01 -e vhost=shop.example.com -e php=8.3
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver01 -e vhost=example.com       # apex, highest PHP
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver02 -e vhost=status.example.com -e php=none
 ```
 
-Creates a webroot + Apache vhost and wires Cloudflare DNS. Routing depends
-on how the server was provisioned: a server with `--cloudflare-tunnel` gets
-an ingress rule added to its own tunnel + a proxied CNAME; a server without
-one gets a direct A record (proxied by default; `--proxy off` for DNS-only,
-e.g. if you'll run `certbot --apache` yourself). The domain is validated
-against the live Cloudflare zone list first. Idempotent — re-running for the
-same hostname reuses the existing webroot/vhost/DNS record.
+On a LAMP server each vhost gets a webroot under
+`/var/www/html/sites/<fqdn>/public` with Apache HTTP and HTTPS vhosts in
+`/etc/apache2/vhosts.d/` (PHP-FPM unless `php=none`), its own DNS-01 cert,
+a route on the server's dedicated tunnel (created with the first vhost if
+the server was provisioned without `--cloudflare-tunnel`) and a proxied
+CNAME. Apache itself answers 80/443 directly — there's no proxy in front —
+so the UDM records point office clients straight at it.
 
 ## Docker static-site servers (`--role docker`)
 
@@ -241,8 +244,8 @@ For a two-tier setup — dedicated DB server plus one or more app servers:
 ./bin/provision-server.sh --name db01 --region sin \
   --db-only --db-allow-from <app01's public IPv4 from its state file>
 
-# 3. Actual vhost content
-./bin/add-site.sh app01 app example.com php
+# 3. Actual vhost content (from the repo root)
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l app01 -e vhost=app.example.com
 ```
 
 `--db-only` skips Apache/PHP/certbot entirely and installs standalone MySQL,

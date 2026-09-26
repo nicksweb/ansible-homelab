@@ -1,7 +1,7 @@
 ---
 # One dedicated tunnel per server, named <server>-tunnel. Docker servers get
-# theirs at provisioning; a Proxmox container that was provisioned without
-# --public-hostname gets one here, with its first vhost.
+# theirs at provisioning; a LAMP server or Proxmox container provisioned
+# without one gets it here, with its first vhost.
 
 - name: Start from the tunnel recorded at provisioning
   ansible.builtin.set_fact:
@@ -36,9 +36,9 @@
   delegate_to: localhost
   become: false
   block:
-    - name: Only a Proxmox container can be missing its tunnel
+    - name: Only an Apache server (LAMP or Proxmox) can be missing its tunnel
       ansible.builtin.assert:
-        that: prov_role == 'lxc'
+        that: prov_role != 'docker-static'
         fail_msg: "{{ inventory_hostname }} is a docker-static server without a tunnel id in state — its provisioning is incomplete."
         quiet: true
 

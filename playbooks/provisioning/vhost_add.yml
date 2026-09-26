@@ -6,7 +6,8 @@
 #     -l web01 -e vhost=shop.example.com
 #
 # Optional: -e service=http://grafana:3000 (docker servers: proxy to that
-# container instead of a static site), -e udm=false, -e takeover=true.
+# container instead of a static site), -e php=none|highest|8.3 (LAMP
+# servers; default highest), -e udm=false, -e takeover=true.
 # For bulk changes edit vhosts.yml directly and run vhosts.yml instead.
 - name: Add a vhost
   hosts: provisioned
@@ -27,6 +28,7 @@
         vhosts_entry: >-
           {{ {'hostname': vhost | lower | trim}
              | combine({'service': service} if service is defined else {})
+             | combine({'php': php | string} if php is defined else {})
              | combine({'udm': udm | bool} if udm is defined else {})
              | combine({'takeover': takeover | bool} if takeover is defined else {}) }}
 

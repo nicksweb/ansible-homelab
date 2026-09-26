@@ -6,8 +6,9 @@ site_vhost_hostname: ""
 # optional SSL vhost variant with a SAN-coverage check against an existing
 # cert) or "vhosts_d" (BinaryLane toolkit convention: install-lamp.sh's
 # /etc/apache2/vhosts.d/<fqdn>.conf include-directory, webroot under
-# /var/www/html/sites/<fqdn>/public, optional PHP-FPM wiring — TLS for
-# this style is handled separately by the certbot_http01 role, not here).
+# /var/www/html/sites/<fqdn>/public, optional PHP-FPM wiring). With
+# site_vhost_ssl, both styles also get a :443 vhost on the cert in
+# site_vhost_cert_dir once it exists.
 site_vhost_style: sites_available
 
 site_vhost_welcome_subtitle: "Provisioned via Ansible."

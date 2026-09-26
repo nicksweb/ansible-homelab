@@ -233,8 +233,8 @@ fqdn_for() { echo "${1}.${SERVER_DOMAIN}"; }
 # *live* Cloudflare zone list for the account and echoes its zone ID. Used
 # whenever a domain other than the configured default SERVER_DOMAIN is
 # requested, so a typo can't silently create records in the wrong place (or
-# fail confusingly) — matches the same safety check add-site.sh has always
-# used for arbitrary domains.
+# fail confusingly) — the same longest-match zone check the vhosts role
+# applies to every hostname.
 resolve_zone_id_for_domain() {
   local domain="$1"
   local zones zone_id

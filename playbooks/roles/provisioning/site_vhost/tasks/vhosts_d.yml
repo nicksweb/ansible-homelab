@@ -1,8 +1,12 @@
 ---
 - name: Compute the webroot and vhost path
+  # The PHP facts are reset too: they would otherwise carry over from the
+  # previous vhost when this role is included in a loop.
   ansible.builtin.set_fact:
     site_vhost_effective_webroot: "/var/www/html/sites/{{ site_vhost_hostname }}/public"
     site_vhost_file: "/etc/apache2/vhosts.d/{{ site_vhost_hostname }}.conf"
+    site_vhost_php_socket: ""
+    site_vhost_php_version: ""
 
 - name: Check whether the webroot already exists
   ansible.builtin.stat:
@@ -71,7 +75,7 @@
 - name: Determine the PHP-FPM socket path
   ansible.builtin.set_fact:
     site_vhost_php_socket: "/run/php/php{{ site_vhost_php_version }}-fpm.sock"
-  when: site_vhost_php != "none" and site_vhost_php_version is defined
+  when: site_vhost_php != "none" and site_vhost_php_version | length > 0
 
 - name: Confirm the PHP-FPM socket actually exists
   ansible.builtin.stat:
@@ -81,7 +85,7 @@
 
 - name: Fail if no matching PHP-FPM socket was found
   ansible.builtin.fail:
-    msg: "No PHP-FPM socket found for version '{{ site_vhost_php_version | default('unknown') }}' (looked for {{ site_vhost_php_socket | default('n/a') }})"
+    msg: "No PHP-FPM socket found for version '{{ site_vhost_php_version or 'unknown' }}' (looked for {{ site_vhost_php_socket or 'n/a' }})"
   when: site_vhost_php != "none" and not (site_vhost_php_socket_stat.stat.exists | default(false))
 
 - name: Check whether the vhost already exists
@@ -102,4 +106,30 @@
     mode: '0644'
   become: true
   when: not site_vhost_file_stat.stat.exists
+  notify: "reload apache2"
+
+- name: Check for this hostname's certificate
+  ansible.builtin.stat:
+    path: "{{ site_vhost_cert_dir }}/fullchain.pem"
+  register: site_vhost_d_cert
+  become: true
+  when: site_vhost_ssl
+
+- name: Enable mod_ssl
+  community.general.apache2_module:
+    name: ssl
+    state: present
+  become: true
+  when: site_vhost_ssl and site_vhost_d_cert.stat.exists
+  notify: "reload apache2"
+
+- name: Write the HTTPS vhost (managed — rewritten if the cert or PHP version changes)
+  ansible.builtin.template:
+    src: vhosts_d_ssl.conf.j2
+    dest: "/etc/apache2/vhosts.d/{{ site_vhost_hostname }}-ssl.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: site_vhost_ssl and site_vhost_d_cert.stat.exists
   notify: "reload apache2"

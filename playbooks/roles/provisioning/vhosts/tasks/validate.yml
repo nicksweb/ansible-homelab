@@ -1,9 +1,13 @@
 ---
-- name: Only docker-static BinaryLane servers and Proxmox containers take vhosts
+- name: Only servers with a web stack take vhosts
   ansible.builtin.assert:
-    that: prov_role in ['docker-static', 'lxc']
-    fail_msg: "{{ inventory_hostname }} is a '{{ prov_role }}' server — use provisioning/binarylane/bin/add-site.sh for LAMP servers."
+    that: prov_role in ['docker-static', 'lamp', 'web-no-local-db', 'lxc']
+    fail_msg: "{{ inventory_hostname }} is a '{{ prov_role }}' server, which has no web server to put vhosts on."
     quiet: true
+
+- name: Which web stack this server runs
+  ansible.builtin.set_fact:
+    vhosts_lamp: "{{ prov_role in ['lamp', 'web-no-local-db'] }}"
 
 - name: Normalise the vhost list
   ansible.builtin.set_fact:
@@ -15,6 +19,7 @@
               'hostname': e.hostname | default('') | string | lower | trim,
               'state': 'absent' if vhosts_teardown else e.state | default('present'),
               'service': e.service | default('') | string,
+              'php': e.php | default('') | string,
               'udm': e.udm | default(vhosts_udm) | bool,
               'takeover': e.takeover | default(false) | bool}) -%}
       {%- endfor -%}
@@ -34,11 +39,14 @@
       - item.hostname not in vhosts_base_names
       - item.service == '' or prov_role == 'docker-static'
       - item.service == '' or item.service is match('^https?://[A-Za-z0-9._-]+(:[0-9]+)?/?$')
+      - item.php == '' or vhosts_lamp
+      - item.php == '' or item.php is match('^(none|highest|[0-9]+\.[0-9]+)$')
     fail_msg: >-
       Bad vhost entry {{ item }}. Needs a valid lowercase hostname and state
       present|absent; must not repeat a hostname the provisioning script
       already routes ({{ vhosts_base_names | join(', ') }}); `service`
-      (http://container:port) is only for docker-static servers.
+      (http://container:port) is only for docker-static servers, `php`
+      (none|highest|8.3) only for LAMP servers.
     quiet: true
   loop: "{{ vhosts_list }}"
   loop_control:

@@ -1,13 +1,14 @@
-<VirtualHost *:80>
+<VirtualHost *:443>
     ServerAdmin webmaster@{{ site_vhost_hostname }}
     ServerName {{ site_vhost_hostname }}
     DocumentRoot {{ site_vhost_effective_webroot }}
 
+    SSLEngine on
+    SSLCertificateFile {{ site_vhost_cert_dir }}/fullchain.pem
+    SSLCertificateKeyFile {{ site_vhost_cert_dir }}/privkey.pem
+
     ErrorLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.error.log
     CustomLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.access.log combined
-
-    SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on
-    SetEnvIf X-Forwarded-Proto "^https$" HTTP_X_FORWARDED_PROTO=https
 
     <FilesMatch "^\.ht">
         Require all denied

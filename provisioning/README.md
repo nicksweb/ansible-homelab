@@ -44,8 +44,8 @@ runner); `binarylane/lib/` keeps the BinaryLane-specific ones.
 ## Vhosts (Ansible)
 
 Once a server exists, what it *serves* is declared in the Ansible
-inventory and converged by one playbook — for both BinaryLane
-`--role docker` servers and Proxmox containers.
+inventory and converged by one playbook — for BinaryLane LAMP and
+`--role docker` servers and Proxmox containers alike.
 
 - **Inventory:** `provisioning/inventory/provisioned.py` lists every live
   server straight from the toolkits' `state/` (groups `provisioned` >
@@ -63,8 +63,9 @@ ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_remove.y
 ansible-playbook -i provisioning/inventory playbooks/provisioning/vhosts.yml [-l web01]   # converge after editing vhosts.yml
 ```
 
-Per vhost: a DNS-01 cert, the web server config (Apache on a container;
-the `web` container plus an NPM server block on a docker server), a route
+Per vhost: a DNS-01 cert, the web server config (Apache on a LAMP server or
+container; the `web` container plus an NPM server block on a docker
+server), a route
 on the server's dedicated tunnel and a proxied Cloudflare CNAME. Then the
 direct HTTPS path is tested from the control host, and only if it works
 does the UDM get a record, so LAN clients go straight to the server:
@@ -73,11 +74,12 @@ does the UDM get a record, so LAN clients go straight to the server:
 |---|---|
 | Proxmox container | `<vhost>` CNAME → `<container fqdn>` (its DHCP-reservation record) |
 | BinaryLane docker server | `<server fqdn>` A → public IP, and `<vhost>` CNAME → `<server fqdn>` (the office IP is on the server's 443 allow-list) |
+| BinaryLane LAMP server | as above — Apache answers 443 directly |
 
 If the direct path stops working, the next run withdraws the UDM record, so
 LAN clients fall back to Cloudflare instead of breaking. `destroy-*.sh` removes
 every declared vhost's CNAME and UDM records, then archives its host_vars.
-LAMP servers still use `binarylane/bin/add-site.sh`.
+
 
 ## Getting started
 
