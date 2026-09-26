@@ -1,0 +1,67 @@
+---
+# A working vhost answers 2xx/3xx (or 401/403, e.g. behind auth). 404 only
+# counts for a `service` vhost, whose app may have nothing at / — for a
+# static site or Apache vhost it means the request hit a catch-all instead.
+# Retried, since a new CNAME or tunnel route can take a little while.
+- name: Whether this server has a direct HTTPS path (Apache on the LXC, NPM on a docker server)
+  ansible.builtin.set_fact:
+    vhosts_direct_capable: "{{ prov_role == 'lxc' or prov_npm }}"
+
+- name: Each vhost answers through Cloudflare and the tunnel (public DNS, not the UDM)
+  ansible.builtin.command: >-
+    curl -s -o /dev/null -w '%{http_code}' --max-time 15
+    --doh-url https://cloudflare-dns.com/dns-query https://{{ vhosts_item.hostname }}/
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+  register: vhosts_tunnel_check
+  until: vhosts_tunnel_check.stdout is match('^(2|3|401|403)') or (vhosts_item.service != '' and vhosts_tunnel_check.stdout is match('^4'))
+  retries: 18
+  delay: 5
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Each vhost answers directly on the server with a valid cert (the path LAN clients will take)
+  ansible.builtin.command: >-
+    curl -s -o /dev/null -w '%{http_code}' --max-time 10
+    --resolve {{ vhosts_item.hostname }}:443:{{ prov_ip }} https://{{ vhosts_item.hostname }}/
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+  register: vhosts_direct_check
+  until: vhosts_direct_check.stdout is match('^(2|3|401|403)') or (vhosts_item.service != '' and vhosts_direct_check.stdout is match('^4'))
+  retries: 6
+  delay: 5
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when: vhosts_direct_capable
+
+- name: Collect the results
+  ansible.builtin.set_fact:
+    vhosts_status: >-
+      {%- set out = {} -%}
+      {%- for r in vhosts_tunnel_check.results | default([]) -%}
+      {%-   set c = r.stdout | default('000') -%}
+      {%-   set _ = out.update({r.vhosts_item.hostname: {
+              'tunnel': c,
+              'tunnel_ok': c is match('^(2|3|401|403)') or (r.vhosts_item.service != '' and c is match('^4')),
+              'direct': '', 'direct_ok': false}}) -%}
+      {%- endfor -%}
+      {%- for r in vhosts_direct_check.results | default([]) if r.stdout is defined -%}
+      {%-   set c = r.stdout -%}
+      {%-   set _ = out[r.vhosts_item.hostname].update({
+              'direct': c,
+              'direct_ok': c is match('^(2|3|401|403)') or (r.vhosts_item.service != '' and c is match('^4'))}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Which paths work
+  ansible.builtin.set_fact:
+    vhosts_tunnel_ok: "{{ vhosts_status | dict2items | selectattr('value.tunnel_ok') | map(attribute='key') | list }}"
+    vhosts_direct_ok: "{{ vhosts_status | dict2items | selectattr('value.direct_ok') | map(attribute='key') | list }}"

@@ -78,3 +78,47 @@ ansible_run_playbook_root() {
   local playbook_relpath="$1" target_ip="$2" ssh_key="$3" extra_vars_json="${4:-}"
   ansible_run_playbook "$playbook_relpath" "$target_ip" "root" "$ssh_key" "$extra_vars_json"
 }
+
+# ansible_vhosts_teardown <name> — for destroy-*.sh: deletes the Cloudflare
+# CNAMEs and UDM records of every vhost declared for <name> in
+# provisioning/inventory (plus a cloud server's UDM host record), via the
+# vhosts playbook in teardown mode, which never touches the server itself.
+# Then archives its host_vars so a future server reusing the name starts
+# with no vhosts. Must run while <name>'s state is still live (the dynamic
+# inventory skips DESTROYED servers).
+ansible_vhosts_teardown() {
+  local name="$1" inv="$ANSIBLE_REPO_ROOT/provisioning/inventory" rc=0
+  local hv="$inv/host_vars/$name"
+  if ! ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-inventory -i "$inv" --host "$name" >/dev/null 2>&1; then
+    log "$name isn't in the provisioned inventory (status not Completed) — no vhost records to remove."
+    return 0
+  fi
+  log "Removing $name's vhost DNS records (Cloudflare + UDM) via Ansible..."
+  ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook -i "$inv" \
+    "$ANSIBLE_REPO_ROOT/playbooks/provisioning/vhosts.yml" -l "$name" -e vhosts_teardown=true >&2 || rc=$?
+  if [ "$rc" -eq 0 ] && [ -d "$hv" ]; then
+    mv "$hv" "$hv.destroyed-$(date +%Y%m%d-%H%M%S)"
+    log "Archived $hv"
+  fi
+  return $rc
+}
+
+# ansible_declared_vhosts <name> — prints the hostnames declared in
+# provisioning/inventory/host_vars/<name>/vhosts.yml, one per line.
+ansible_declared_vhosts() {
+  local f="$ANSIBLE_REPO_ROOT/provisioning/inventory/host_vars/$1/vhosts.yml"
+  [ -f "$f" ] || return 0
+  python3 - "$f" <<'PY'
+import sys, yaml
+for v in (yaml.safe_load(open(sys.argv[1])) or {}).get("vhosts") or []:
+    print(v if isinstance(v, str) else v.get("hostname", ""))
+PY
+}
+
+# ansible_vhost_add <name> <hostname> — records <hostname> in <name>'s
+# host_vars and converges it (vhost_add.yml). <name> must already be in the
+# provisioned inventory, i.e. its state written with status Completed.
+ansible_vhost_add() {
+  ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook -i "$ANSIBLE_REPO_ROOT/provisioning/inventory" \
+    "$ANSIBLE_REPO_ROOT/playbooks/provisioning/vhost_add.yml" -l "$1" -e "vhost=$2" >&2
+}

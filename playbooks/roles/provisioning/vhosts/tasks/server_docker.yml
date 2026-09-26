@@ -1,0 +1,116 @@
+---
+# docker-static server: static sites in the `web` container (or a proxy to
+# another container via `service`), reached two ways —
+#   public: Cloudflare -> tunnel (cloudflared container) -> service
+#   LAN:    UDM -> server's public IP :443 -> NPM (allow-listed) -> service,
+#           using a server block this role manages in NPM's custom include
+#           and a DNS-01 cert issued on the host.
+# Proxy hosts you create in NPM's own UI are untouched; a hostname in both
+# is served by NPM's (it loads first).
+
+- name: A docker-static server always has its tunnel from provisioning
+  ansible.builtin.assert:
+    that: vhosts_tunnel_id | length > 0
+    fail_msg: "{{ inventory_hostname }} has no tunnel id in state."
+    quiet: true
+
+- name: Paths and the static-site subset
+  ansible.builtin.set_fact:
+    vhosts_npm_dir: "/home/{{ ansible_user }}/docker/npm"
+    vhosts_static: "{{ vhosts_present | selectattr('service', 'equalto', '') | map(attribute='hostname') | list }}"
+
+- name: Static sites in the web container (placeholder page only if new; content of absent sites is kept)
+  ansible.builtin.include_role:
+    name: provisioning/docker_web_static
+  vars:
+    docker_web_static_sites: "{{ vhosts_static }}"
+    docker_web_static_sites_absent: "{{ vhosts_absent | map(attribute='hostname') | list }}"
+
+- name: Direct HTTPS through NPM
+  when: prov_npm
+  block:
+    - name: Certificate per vhost (DNS-01)
+      ansible.builtin.include_role:
+        name: provisioning/certbot_dns01
+      vars:
+        certbot_dns01_fqdn: "{{ vhosts_item.hostname }}"
+        certbot_dns01_email: "{{ prov_letsencrypt_email }}"
+        certbot_dns01_cf_token: "{{ vhosts_cf_token }}"
+        certbot_dns01_deploy_hook: docker exec npm nginx -s reload
+      loop: "{{ vhosts_present }}"
+      loop_control:
+        loop_var: vhosts_item
+        label: "{{ vhosts_item.hostname }}"
+
+    - name: NPM with the host's certs mounted
+      ansible.builtin.include_role:
+        name: provisioning/docker_npm
+
+    - name: Directory for the managed server blocks
+      ansible.builtin.file:
+        path: "{{ vhosts_npm_dir }}/data/nginx/custom/managed"
+        state: directory
+        mode: '0755'
+
+    - name: Include them from NPM's custom http config
+      ansible.builtin.blockinfile:
+        path: "{{ vhosts_npm_dir }}/data/nginx/custom/http.conf"
+        create: true
+        mode: '0644'
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: vhosts role"
+        block: |
+          map $http_upgrade $vhosts_connection_upgrade { default upgrade; '' close; }
+          include /data/nginx/custom/managed/*.conf;
+      register: vhosts_npm_hook
+
+    - name: Server block per vhost
+      ansible.builtin.template:
+        src: npm-vhost.conf.j2
+        dest: "{{ vhosts_npm_dir }}/data/nginx/custom/managed/{{ vhosts_item.hostname }}.conf"
+        mode: '0644'
+      loop: "{{ vhosts_present }}"
+      loop_control:
+        loop_var: vhosts_item
+        label: "{{ vhosts_item.hostname }}"
+      register: vhosts_npm_confs
+
+    - name: Remove the server blocks of absent entries
+      ansible.builtin.file:
+        path: "{{ vhosts_npm_dir }}/data/nginx/custom/managed/{{ vhosts_item.hostname }}.conf"
+        state: absent
+      loop: "{{ vhosts_absent }}"
+      loop_control:
+        loop_var: vhosts_item
+        label: "{{ vhosts_item.hostname }}"
+      register: vhosts_npm_removed
+
+    - name: Test and reload NPM's nginx
+      ansible.builtin.shell: docker exec npm nginx -t && docker exec npm nginx -s reload
+      when: vhosts_npm_hook is changed or vhosts_npm_confs is changed or vhosts_npm_removed is changed
+
+- name: Delete the certs of absent entries
+  ansible.builtin.shell: |
+    if [ -d "/etc/letsencrypt/live/{{ vhosts_item.hostname }}" ]; then
+      certbot delete --non-interactive --cert-name "{{ vhosts_item.hostname }}" && echo deleted
+    fi
+  loop: "{{ vhosts_absent }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+  register: vhosts_docker_certs_removed
+  changed_when: "'deleted' in vhosts_docker_certs_removed.stdout"
+
+- name: Tunnel ingress — provisioning routes plus every vhost
+  ansible.builtin.include_role:
+    name: provisioning/docker_cloudflared
+  vars:
+    docker_cloudflared_tunnel_id: "{{ vhosts_tunnel_id }}"
+    docker_cloudflared_routes: >-
+      {%- set out = prov_base_routes | list -%}
+      {%- for v in vhosts_present -%}
+      {%-   set _ = out.append({'hostname': v.hostname, 'service': v.service or vhosts_default_service}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Apply pending reloads/restarts now, so the checks below see the new config
+  ansible.builtin.meta: flush_handlers

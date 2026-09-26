@@ -10,8 +10,10 @@
 - name: Disable the default site
   ansible.builtin.command: a2dissite 000-default
   become: true
-  changed_when: true
+  register: site_vhost_a2dis
+  changed_when: site_vhost_a2dis.rc == 0 and 'already disabled' not in site_vhost_a2dis.stdout
   failed_when: false
+  notify: "reload apache2"
 
 - name: Compute the conf name and webroot
   ansible.builtin.set_fact:
@@ -27,13 +29,14 @@
     mode: '0755'
   become: true
 
-- name: Write the welcome page
+- name: Write the welcome page (only if there's no page yet — never clobbers deployed content)
   ansible.builtin.template:
     src: welcome_page.html.j2
     dest: "{{ site_vhost_effective_webroot }}/index.html"
     owner: www-data
     group: www-data
     mode: '0644'
+    force: false
   become: true
 
 - name: Write the HTTP vhost
@@ -44,12 +47,15 @@
     group: root
     mode: '0644'
   become: true
+  notify: "reload apache2"
 
 - name: Enable the HTTP site
   ansible.builtin.command: "a2ensite {{ site_vhost_conf_name }}"
   become: true
-  changed_when: true
+  register: site_vhost_a2en
+  changed_when: site_vhost_a2en.rc == 0 and 'already enabled' not in site_vhost_a2en.stdout
   failed_when: false
+  notify: "reload apache2"
 
 - name: Check for an existing Let's Encrypt cert
   ansible.builtin.stat:
@@ -86,6 +92,7 @@
     group: root
     mode: '0644'
   become: true
+  notify: "reload apache2"
   when: site_vhost_ssl and site_vhost_wire_ssl | default(false)
 
 - name: Enable Apache SSL module and the SSL site
@@ -96,8 +103,11 @@
       community.general.apache2_module:
         name: ssl
         state: present
+      notify: "reload apache2"
 
     - name: Enable the SSL site
       ansible.builtin.command: "a2ensite {{ site_vhost_conf_name }}-ssl"
-      changed_when: true
+      register: site_vhost_a2en_ssl
+      changed_when: site_vhost_a2en_ssl.rc == 0 and 'already enabled' not in site_vhost_a2en_ssl.stdout
       failed_when: false
+      notify: "reload apache2"

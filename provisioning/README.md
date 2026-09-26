@@ -41,6 +41,44 @@ invoked through `common/ansible.sh`. `common/` holds the helpers both
 toolkits share (Cloudflare, UDM, Tailscale, SSH, logging, the Ansible
 runner); `binarylane/lib/` keeps the BinaryLane-specific ones.
 
+## Vhosts (Ansible)
+
+Once a server exists, what it *serves* is declared in the Ansible
+inventory and converged by one playbook — for both BinaryLane
+`--role docker` servers and Proxmox containers.
+
+- **Inventory:** `provisioning/inventory/provisioned.py` lists every live
+  server straight from the toolkits' `state/` (groups `provisioned` >
+  `binarylane`, `proxmox_lxc`), so it never needs updating by hand.
+  It isn't in `ansible.cfg`'s default inventory — pass
+  `-i provisioning/inventory`.
+- **Declared vhosts:** `provisioning/inventory/host_vars/<server>/vhosts.yml`
+  (gitignored). Format and options (`service`, `udm`, `takeover`,
+  `state: absent`) in `playbooks/roles/provisioning/vhosts/defaults/main.yml`.
+
+```bash
+# from the repo root
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml    -l web01 -e vhost=shop.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_remove.yml -l web01 -e vhost=shop.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhosts.yml [-l web01]   # converge after editing vhosts.yml
+```
+
+Per vhost: a DNS-01 cert, the web server config (Apache on a container;
+the `web` container plus an NPM server block on a docker server), a route
+on the server's dedicated tunnel and a proxied Cloudflare CNAME. Then the
+direct HTTPS path is tested from the control host, and only if it works
+does the UDM get a record, so LAN clients go straight to the server:
+
+| Server | UDM static DNS |
+|---|---|
+| Proxmox container | `<vhost>` CNAME → `<container fqdn>` (its DHCP-reservation record) |
+| BinaryLane docker server | `<server fqdn>` A → public IP, and `<vhost>` CNAME → `<server fqdn>` (the office IP is on the server's 443 allow-list) |
+
+If the direct path stops working, the next run withdraws the UDM record, so
+LAN clients fall back to Cloudflare instead of breaking. `destroy-*.sh` removes
+every declared vhost's CNAME and UDM records, then archives its host_vars.
+LAMP servers still use `binarylane/bin/add-site.sh`.
+
 ## Getting started
 
 ```bash

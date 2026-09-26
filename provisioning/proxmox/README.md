@@ -99,7 +99,6 @@ provisioning/
     ├── bin/
     │   ├── provision-container.sh
     │   ├── destroy-container.sh
-    │   ├── add-vhost.sh                 # attach another public hostname to an existing container
     │   └── deploy-mariadb-stack.sh      # deploy the MariaDB/phpMyAdmin/Traefik stack
     ├── lib/common.sh              # config, credentials, pve_api()
     ├── state/                     # per-container JSON, gitignored
@@ -247,22 +246,21 @@ share a domain with the container's internal FQDN.
 (architecture-specific), not from Cloudflare's apt repo — the apt repo is
 keyed by Ubuntu codename and lags behind on very new Ubuntu releases.
 
-### Multiple public hostnames — `add-vhost.sh`
+### More public hostnames — vhosts (Ansible)
 
-`provision-container.sh` only wires up one public hostname at creation time.
-To add another to an already-running container:
+Further hostnames on an existing container are vhosts, managed with
+Ansible — see [../README.md](../README.md#vhosts-ansible):
 
 ```bash
-./bin/add-vhost.sh host004 second.example.com
-# non-interactively:
-./bin/add-vhost.sh host004 second.example.com --yes
+# from the repo root
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l host004 -e vhost=second.example.com
 ```
 
-Reuses the container's existing tunnel (adds a route + new CNAME rather than
-a second tunnel), creates a local DNS override, expands the TLS cert if one
-exists, and installs a vhost with its own docroot. Refuses if the hostname
-is already claimed by a *different* container; re-running for the *same*
-container is treated as an idempotent repair.
+Each gets its own Apache vhost and docroot, its own DNS-01 cert, a route
+on the container's tunnel (created with the first vhost if the container
+has none) and a CNAME, plus a UDM CNAME → the container's FQDN once the
+direct HTTPS path checks out. Extra hostnames passed to
+`provision-container.sh --public-hostname a,b,c` are added the same way.
 
 ## Local DNS override for the public hostname (no hairpin on LAN)
 
@@ -290,7 +288,7 @@ header with content labelled for the internal FQDN.
 ## MariaDB + phpMyAdmin + Traefik stack (Docker Compose)
 
 Deployed onto an already-provisioned container, the same layering pattern as
-`add-vhost.sh` rather than baked into `provision-container.sh`:
+vhosts rather than baked into `provision-container.sh`:
 
 ```bash
 ./bin/provision-container.sh --hostname db01 --enable-tls --skip-web

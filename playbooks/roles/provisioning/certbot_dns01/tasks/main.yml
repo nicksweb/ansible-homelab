@@ -106,6 +106,19 @@
       changed_when: true
       no_log: true
 
+- name: Install the renewal deploy hook
+  ansible.builtin.copy:
+    dest: "/etc/letsencrypt/renewal-hooks/deploy/{{ certbot_dns01_deploy_hook_name }}"
+    content: |
+      #!/bin/sh
+      # Managed by Ansible (certbot_dns01): runs after each successful renewal.
+      {{ certbot_dns01_deploy_hook }}
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  when: certbot_dns01_deploy_hook | length > 0
+
 - name: Report certificate status
   ansible.builtin.command: certbot certificates --cert-name {{ certbot_dns01_fqdn }}
   become: true

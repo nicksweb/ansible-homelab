@@ -801,7 +801,7 @@ RECORD="$(record_file "$NAME")"
   if $DOCKER_ROLE; then
     echo "Docker:"; echo "$DOCKER_VERSIONS"; echo
     echo "MariaDB:"; echo "Running (container, backend network only, no published port; root password in ~/docker/mariadb/.env on the server)"; echo
-    echo "Web (nginx, static):"; echo "Running (container, no published port; sites added with bin/add-static-site.sh)"; echo
+    echo "Web (nginx, static):"; echo "Running (container, no published port; sites added as vhosts: playbooks/provisioning/vhost_add.yml)"; echo
     if $DOCKER_NPM; then
       echo "Nginx Proxy Manager:"; echo "Running — admin https://$NPM_ADMIN_HOSTNAME/ (tunnel), proxy https://$NPM_PROXY_HOSTNAME/ (tunnel)"; echo
       echo "NPM direct 443:"; echo "$( $FIREWALL_OK && echo "Restricted to Cloudflare ranges + trusted: ${TRUSTED_443:-<none>}" || echo "NOT RESTRICTED — run bin/allow-cloudflare-ips.sh $NAME" )"; echo

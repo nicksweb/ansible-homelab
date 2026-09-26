@@ -3,6 +3,7 @@
 # conf.d entry. No host ports published — cloudflared and NPM reach it by
 # name on the shared `frontend` network. Ported from server-provisioning's
 # scripts/install-web-static-remote.sh + scripts/add-static-site-remote.sh.
+# Sites come from the vhosts role (a docker server's vhosts without `service`).
 #
 # Directories are owned by the admin user, not root: bin/deploy-site.sh
 # rsyncs builds into sites/<fqdn>/ as that user.
@@ -60,6 +61,13 @@
     group: "{{ ansible_user }}"
     mode: '0644'
   loop: "{{ docker_web_static_sites }}"
+  notify: "reload web nginx"
+
+- name: Remove the server block of each dropped site (content is kept)
+  ansible.builtin.file:
+    path: "{{ docker_web_static_dir }}/conf.d/{{ item }}.conf"
+    state: absent
+  loop: "{{ docker_web_static_sites_absent }}"
   notify: "reload web nginx"
 
 - name: Write docker-compose.yml

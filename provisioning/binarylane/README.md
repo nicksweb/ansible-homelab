@@ -202,23 +202,31 @@ containers on two shared networks (`frontend`, `backend`):
   `nginx-<name>.<domain>`). Log in and set the admin account immediately
   after provisioning; consider a Cloudflare Access policy in front of it.
 
-Day-to-day:
+Day-to-day — sites are **vhosts**, managed with Ansible (see
+[../README.md](../README.md#vhosts-ansible)):
 
 ```bash
-./bin/add-static-site.sh web01 docs example.com         # webroot + nginx conf + tunnel route + CNAME
-./bin/deploy-site.sh web01 docs.example.com ./_site     # rsync a local build (--delete)
-./bin/add-tunnel-hostname.sh web01 app.example.com http://npm:80   # any container:port
-./bin/allow-cloudflare-ips.sh web01 --extra-ip 203.0.113.7         # refresh ranges / add a trusted IP
+# from the repo root
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l web01 -e vhost=docs.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l web01 \
+  -e vhost=app.example.com -e service=http://grafana:3000       # proxy to a container instead
+./provisioning/binarylane/bin/deploy-site.sh web01 docs.example.com ./_site   # rsync a local build (--delete)
+./provisioning/binarylane/bin/allow-cloudflare-ips.sh web01 --extra-ip 203.0.113.7   # refresh ranges / add a trusted IP
 ```
 
-Every tunnel hostname is recorded in `state/<name>.json` under
-`.cloudflare.tunnel_routes`, and the whole cloudflared config is
-re-rendered from that list on each change (`docker_cloudflared` role), so
-it can't drift. `destroy-server.sh` deletes every CNAME in that list.
+Each vhost gets a static site in `web` (or a route to `service`), a
+tunnel route and proxied CNAME, a DNS-01 cert on the host, and a server
+block in NPM's custom config for the direct path. Once that direct path
+answers from the control host, the UDM gets `<server fqdn>` A → the public
+IP and `<vhost>` CNAME → `<server fqdn>`, so office clients go straight to
+the server (their public IP is in `TRUSTED_443_IPS`) instead of out and
+back through Cloudflare.
 
-The on-server work is Ansible (`playbooks/provisioning/docker_*.yml`,
-roles under `playbooks/roles/provisioning/docker_*`); these scripts do the
-BinaryLane/Cloudflare API calls and keep local state.
+The routes `provision-server.sh` creates itself (primary hostname, NPM
+admin/proxy) stay in `state/<name>.json` under `.cloudflare.tunnel_routes`;
+the cloudflared config is always re-rendered from those plus the declared
+vhosts (`docker_cloudflared` role), so it can't drift. `destroy-server.sh`
+removes both.
 
 ## Splitting DB and web servers
 

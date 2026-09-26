@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Helpers for --role docker servers, shared by provision-server.sh,
-# add-static-site.sh, add-tunnel-hostname.sh and allow-cloudflare-ips.sh.
+# Helpers for --role docker servers, used by provision-server.sh for the
+# routes it creates itself (primary hostname, NPM admin/proxy). Vhosts added
+# later are the Ansible vhosts role's job (playbooks/provisioning/vhosts.yml).
 # Requires lib/common.sh and common/ansible.sh already sourced, and
 # load_cloudflare_creds already called for the route helpers.
 #
@@ -8,7 +9,8 @@
 # .cloudflare.tunnel_routes holds every hostname the tunnel serves
 # ({hostname, service, zone_id, dns_record_id}), and every change re-renders
 # the server's full cloudflared config from it via the docker_cloudflared
-# role. destroy-server.sh deletes every CNAME listed there.
+# role. destroy-server.sh deletes every CNAME listed there. The vhosts role
+# renders these routes plus the server's declared vhosts.
 
 # docker_require_server <name> — dies unless <name> is a live docker-role
 # server with a tunnel. Sets PUBLIC_IP and TUNNEL_ID.

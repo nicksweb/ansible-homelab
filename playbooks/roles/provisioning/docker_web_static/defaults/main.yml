@@ -8,3 +8,7 @@ docker_web_static_network: frontend
 # new — deployed content is never overwritten) and a conf.d/<fqdn>.conf.
 # Sites dropped from this list are left in place, not deleted.
 docker_web_static_sites: []
+
+# Sites to stop serving: their conf.d entry is removed, their content under
+# sites/<fqdn>/ is kept.
+docker_web_static_sites_absent: []

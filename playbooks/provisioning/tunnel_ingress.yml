@@ -1,6 +1,6 @@
 ---
 # Entry point for the tunnel_ingress role. Invoked by the provisioning
-# orchestrators (bin/add-vhost.sh, bin/provision-*.sh) against a single,
+# orchestrators (bin/provision-*.sh) and the vhosts role against a single,
 # already-provisioned target with cloudflared already installed.
 #
 # Example:

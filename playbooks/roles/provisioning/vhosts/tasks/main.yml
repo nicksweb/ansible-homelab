@@ -1,0 +1,46 @@
+---
+# Converges the vhosts declared for one provisioned server (see defaults):
+# TLS cert, web server config, tunnel ingress and the public Cloudflare
+# CNAME; then, once the direct HTTPS path is proven, UDM records so LAN
+# clients skip the round trip through Cloudflare:
+#
+#   cloud server:  UDM A      <server fqdn> -> its public IP  (the office's
+#                             public IP is on the server's 443 allow-list)
+#                  UDM CNAME  <vhost>       -> <server fqdn>
+#   Proxmox LXC:   UDM CNAME  <vhost>       -> <container fqdn>  (its
+#                             DHCP-reservation DNS record)
+#
+# The web server picks the site from the Host/SNI name either way.
+# Cloudflare and UDM calls run on the control host; the rest on the server.
+
+- name: Nothing to do for a server with no vhosts
+  ansible.builtin.meta: end_host
+  when: vhosts | length == 0 and not vhosts_teardown
+
+- name: Validate the vhost list
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Read API credentials
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Resolve (or create) the server's tunnel
+  ansible.builtin.include_tasks: tunnel.yml
+
+- name: Configure the server
+  ansible.builtin.include_tasks:
+    file: "server_{{ 'docker' if prov_role == 'docker-static' else 'lxc' }}.yml"
+  when: not vhosts_teardown
+
+- name: Cloudflare DNS
+  ansible.builtin.include_tasks: cloudflare_dns.yml
+
+- name: Verify the tunnel and direct paths
+  ansible.builtin.include_tasks: verify.yml
+  when: not vhosts_teardown
+
+- name: UDM records
+  ansible.builtin.include_tasks: udm.yml
+
+- name: Report
+  ansible.builtin.include_tasks: report.yml
+  when: not vhosts_teardown

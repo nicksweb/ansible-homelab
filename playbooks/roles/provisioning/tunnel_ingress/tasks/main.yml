@@ -11,11 +11,6 @@
     that: tunnel_ingress_tunnel_id | length > 0
     fail_msg: tunnel_ingress_tunnel_id is required.
 
-- name: Require at least one hostname
-  ansible.builtin.assert:
-    that: tunnel_ingress_hostnames | length > 0
-    fail_msg: tunnel_ingress_hostnames must contain at least one hostname.
-
 - name: Write cloudflared ingress config
   ansible.builtin.template:
     src: config.yml.j2

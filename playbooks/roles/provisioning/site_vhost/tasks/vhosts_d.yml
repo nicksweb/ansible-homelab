@@ -102,3 +102,4 @@
     mode: '0644'
   become: true
   when: not site_vhost_file_stat.stat.exists
+  notify: "reload apache2"

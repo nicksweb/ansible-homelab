@@ -17,6 +17,8 @@ source "$PROVISIONING_ROOT/common/udm.sh"
 source "$PROVISIONING_ROOT/common/cloudflare.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/tailscale.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: destroy-container.sh <hostname> [--yes]}"
@@ -75,7 +77,7 @@ if [ "$TUNNEL_ENABLED" = "true" ]; then
     echo "Local DNS override: $PUBLIC_HOSTNAME -> $FQDN (UDM static-dns object $LOCAL_OVERRIDE_ID, will be deleted via API)"
   fi
   if [ "$ADDITIONAL_COUNT" -gt 0 ]; then
-    echo "Additional vhosts (added via add-vhost.sh), each with its own CNAME + local DNS override, will also be deleted:"
+    echo "Additional vhosts (added by the retired add-vhost.sh), each with its own CNAME + local DNS override, will also be deleted:"
     echo "$ADDITIONAL_HOSTNAMES_JSON" | jq -r '.[] | "  - \(.hostname)"'
   fi
 else
@@ -88,6 +90,12 @@ else
   echo "Tailscale: Not configured"
 fi
 echo
+DECLARED_VHOSTS="$(ansible_declared_vhosts "$NAME")"
+if [ -n "$DECLARED_VHOSTS" ]; then
+  echo "Vhosts declared in provisioning/inventory (Cloudflare CNAME + UDM record of each deleted via Ansible):"
+  echo "$DECLARED_VHOSTS" | sed 's/^/  - /'
+  echo
+fi
 echo "The provisioning record at $(record_file "$NAME") will be KEPT and marked DESTROYED (audit trail)."
 echo "============================================================"
 
@@ -103,6 +111,9 @@ sleep 3
 log "Deleting container $VMID..."
 pve_api DELETE "/nodes/$NODE/lxc/$VMID" >/dev/null || die "Container deletion failed — aborting before touching DNS/Cloudflare. Investigate manually."
 log "Container deleted."
+
+# Vhosts declared in provisioning/inventory: their CNAMEs and UDM records.
+ansible_vhosts_teardown "$NAME" || warn "Vhost DNS teardown failed — check the output above and remove leftover Cloudflare CNAMEs / UDM static DNS records by hand."
 
 if [ "$TUNNEL_ENABLED" = "true" ] && [ -n "$TUNNEL_ID" ]; then
   load_cloudflare_token
@@ -137,7 +148,7 @@ if [ "$TUNNEL_ENABLED" = "true" ] && [ -n "$TUNNEL_ID" ]; then
   fi
   if [ "$ADDITIONAL_COUNT" -gt 0 ]; then
     load_udm_creds
-    log "Deleting $ADDITIONAL_COUNT additional vhost(s) added via add-vhost.sh..."
+    log "Deleting $ADDITIONAL_COUNT additional vhost(s) added by the retired add-vhost.sh..."
     for i in $(seq 0 $((ADDITIONAL_COUNT - 1))); do
       AH_HOST="$(echo "$ADDITIONAL_HOSTNAMES_JSON" | jq -r ".[$i].hostname")"
       AH_RECORD_ID="$(echo "$ADDITIONAL_HOSTNAMES_JSON" | jq -r ".[$i].tunnel_dns_record_id // empty")"

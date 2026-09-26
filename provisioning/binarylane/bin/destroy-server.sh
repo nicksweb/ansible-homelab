@@ -11,6 +11,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: destroy-server.sh <name> [--yes]}"
@@ -33,7 +35,7 @@ TUNNEL_ZONE_ID="$(state_read_field "$NAME" '.cloudflare.tunnel_zone_id // empty'
 # Older records (before tunnel_zone_id was tracked separately) assumed the
 # tunnel hostname shared the server's own zone — fall back to that for them.
 [ -z "$TUNNEL_ZONE_ID" ] && TUNNEL_ZONE_ID="$ZONE_ID"
-# Extra tunnel routes (--role docker: sites, NPM, add-tunnel-hostname.sh) —
+# Extra tunnel routes created at provisioning (--role docker: NPM admin/proxy) —
 # every CNAME except the primary one, which is handled on its own below.
 EXTRA_ROUTES="$(jq -r --arg primary "$TUNNEL_RECORD_ID" \
   '.cloudflare.tunnel_routes // [] | .[] | select(.dns_record_id != $primary) | "\(.zone_id)\t\(.dns_record_id)\t\(.hostname)"' \
@@ -86,6 +88,12 @@ else
   echo "Tailscale: Not Configured"
 fi
 echo
+DECLARED_VHOSTS="$(ansible_declared_vhosts "$NAME")"
+if [ -n "$DECLARED_VHOSTS" ]; then
+  echo "Vhosts declared in provisioning/inventory (Cloudflare CNAME + UDM record of each deleted via Ansible):"
+  echo "$DECLARED_VHOSTS" | sed 's/^/  - /'
+  echo
+fi
 echo "The provisioning record at $(record_file "$NAME") will be KEPT and marked DESTROYED (audit trail)."
 echo "============================================================"
 
@@ -99,6 +107,9 @@ bl_api DELETE "/servers/$SERVER_ID" >/dev/null || die "BinaryLane deletion faile
 log "BinaryLane server deleted."
 DESTROYED_IP="$(state_read_field "$NAME" '.public_ipv4 // empty')"
 [ -n "$DESTROYED_IP" ] && ssh_close_multiplexed "$ADMIN_USER" "$DESTROYED_IP"
+
+# Vhosts declared in provisioning/inventory: their CNAMEs and UDM records.
+ansible_vhosts_teardown "$NAME" || warn "Vhost DNS teardown failed — check the output above and remove leftover Cloudflare CNAMEs / UDM static DNS records by hand."
 
 if [ -n "$A_RECORD_ID" ]; then
   log "Deleting Cloudflare A record $A_RECORD_ID..."

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Push a prebuilt local directory to a static site already scaffolded on a
-# --role docker server (via bin/add-static-site.sh). Deliberately dumb: does
+# --role docker server (declared as a vhost without `service` — see
+# playbooks/provisioning/vhost_add.yml). Deliberately dumb: does
 # not build anything itself — build your own site first (e.g.
 # `cd ~/src/my-site && bundle exec jekyll build`), then point this
 # at the output directory. Keeps this script reusable across differently
@@ -12,6 +13,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 SERVER_NAME="${1:?usage: deploy-site.sh <server-name> <fqdn> <local-build-dir>}"
@@ -22,8 +25,8 @@ state_exists "$SERVER_NAME" || die "No local state for server '$SERVER_NAME'. Kn
 STATUS="$(state_read_field "$SERVER_NAME" '.status')"
 [ "$STATUS" != "DESTROYED" ] || die "Server '$SERVER_NAME' is marked DESTROYED in local state."
 
-KNOWN_SITE="$(jq -r --arg f "$FQDN" '.docker.sites // [] | index($f)' "$(state_file "$SERVER_NAME")")"
-[ -n "$KNOWN_SITE" ] && [ "$KNOWN_SITE" != "null" ] || die "'$FQDN' is not a site on '$SERVER_NAME' yet. Scaffold it first: ./bin/add-static-site.sh $SERVER_NAME <subdomain> <domain>"
+ansible_declared_vhosts "$SERVER_NAME" | grep -qx "$FQDN" \
+  || die "'$FQDN' is not a vhost of '$SERVER_NAME' yet. Add it first: ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l $SERVER_NAME -e vhost=$FQDN"
 
 [ -d "$LOCAL_DIR" ] || die "Local build dir '$LOCAL_DIR' does not exist"
 [ -n "$(ls -A "$LOCAL_DIR" 2>/dev/null)" ] || die "Local build dir '$LOCAL_DIR' is empty — refusing to sync (would wipe the live site via --delete)"

@@ -14,9 +14,9 @@
 #   --public-hostname FQDN[,FQDN...]  Expose this container externally via a dedicated Cloudflare
 #                            Tunnel. Accepts a comma-separated list to attach multiple public
 #                            hostnames at creation time (any domain the Cloudflare token can see) —
-#                            the first becomes the primary; the rest are added the same way
-#                            add-vhost.sh adds one to an existing container (shared tunnel, own
-#                            CNAME + local override + vhost each).
+#                            the first becomes the primary; the rest are added as vhosts via
+#                            playbooks/provisioning/vhost_add.yml (shared tunnel, own CNAME +
+#                            cert + UDM record + Apache vhost each).
 #   --enable-tls          Issue a real Let's Encrypt cert for the container's *internal* FQDN via
 #                          DNS-01 (Cloudflare API) — works even though .in.example.com isn't
 #                          publicly resolvable, since DNS-01 only needs to create a TXT record.
@@ -69,9 +69,9 @@ done
 
 # Split --public-hostname on commas. PUBLIC_HOSTNAME (the first entry) drives
 # every existing single-hostname code path below unchanged; anything after
-# it is attached post-creation via the same add-vhost.sh logic used to add a
-# hostname to an already-existing container — shared tunnel, own CNAME +
-# local override + vhost each, not a second tunnel per hostname.
+# it is attached post-creation as a vhost (vhost_add.yml), the same way one
+# is added to an already-existing container — shared tunnel, own CNAME +
+# cert + UDM record + vhost each, not a second tunnel per hostname.
 PUBLIC_HOSTNAMES=()
 if [ -n "$PUBLIC_HOSTNAME_RAW" ]; then
   IFS=',' read -ra _raw_hosts <<< "$PUBLIC_HOSTNAME_RAW"
@@ -134,10 +134,10 @@ if [ "${#PUBLIC_HOSTNAMES[@]}" -gt 0 ]; then
     OTHER_STATUS="$(jq -r '.status' "$f")"
     [ "$OTHER_STATUS" = "DESTROYED" ] && continue
     OTHER_PUBLIC="$(jq -r '.cloudflare.public_hostname // empty' "$f")"
-    OTHER_ADDITIONAL="$(jq -r '.cloudflare.additional_hostnames[]?.hostname // empty' "$f")"
+    OTHER_ADDITIONAL="$(jq -r '.cloudflare.additional_hostnames[]?.hostname // empty' "$f"; ansible_declared_vhosts "$OTHER_NAME")"
     for want in "${PUBLIC_HOSTNAMES[@]}"; do
       if [ "$OTHER_PUBLIC" = "$want" ] || printf '%s\n' "$OTHER_ADDITIONAL" | grep -qx "$want"; then
-        die "'$want' is already in use by '$OTHER_NAME' (status: $OTHER_STATUS). Proceeding would silently steal its Cloudflare CNAME and local DNS override. Destroy '$OTHER_NAME' first, add this hostname to it with add-vhost.sh instead, or pick a different --public-hostname."
+        die "'$want' is already in use by '$OTHER_NAME' (status: $OTHER_STATUS). Proceeding would silently steal its Cloudflare CNAME and local DNS override. Destroy '$OTHER_NAME' first, add this hostname to it as a vhost (playbooks/provisioning/vhost_add.yml) instead, or pick a different --public-hostname."
       fi
     done
   done
@@ -538,21 +538,20 @@ chmod 600 "$RECORD"
 
 # ---------------------------------------------------------------------------
 # Any additional public hostnames beyond the primary (from a comma-separated
-# --public-hostname) are attached now, via the exact same path add-vhost.sh
-# uses for an already-existing container — the primary tunnel/CNAME/DNS
-# override/state/record are already fully written above, so from here on
-# this container looks no different to add-vhost.sh than one that's been
-# running for a while. A failure here warns but doesn't undo the successful
-# primary provisioning that already happened.
+# --public-hostname) are attached now as vhosts, via the same Ansible
+# playbook used for an already-existing container — state is already
+# written as Completed above, so the container is in the provisioned
+# inventory. A failure here warns but doesn't undo the successful primary
+# provisioning that already happened.
 # ---------------------------------------------------------------------------
 ADDITIONAL_OK=0 ADDITIONAL_FAILED=0
 for extra in "${ADDITIONAL_PUBLIC_HOSTNAMES[@]}"; do
   log "Adding additional public hostname $extra ..."
-  if "$HERE/bin/add-vhost.sh" "$HOSTNAME_ARG" "$extra" --yes; then
+  if ansible_vhost_add "$HOSTNAME_ARG" "$extra"; then
     ADDITIONAL_OK=$((ADDITIONAL_OK + 1))
   else
     ADDITIONAL_FAILED=$((ADDITIONAL_FAILED + 1))
-    warn "Failed to add $extra — the container and its primary hostname are still fine. Retry with: ./bin/add-vhost.sh $HOSTNAME_ARG $extra"
+    warn "Failed to add $extra — the container and its primary hostname are still fine. Retry with: ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l $HOSTNAME_ARG -e vhost=$extra"
   fi
 done
 

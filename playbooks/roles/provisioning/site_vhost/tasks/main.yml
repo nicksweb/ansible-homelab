@@ -45,9 +45,12 @@
   become: true
   changed_when: false
 
-- name: Enable and reload Apache
+- name: Ensure Apache is enabled and running
   ansible.builtin.systemd:
     name: apache2
     enabled: true
-    state: reloaded
+    state: started
   become: true
+
+- name: Reload Apache now if any vhost config changed
+  ansible.builtin.meta: flush_handlers
