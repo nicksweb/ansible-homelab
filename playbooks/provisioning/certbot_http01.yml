@@ -1,0 +1,7 @@
+---
+- name: Issue a Let's Encrypt certificate via HTTP-01
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/certbot_http01

@@ -1,0 +1,4 @@
+---
+- name: Reload web nginx
+  ansible.builtin.shell: docker exec web nginx -t && docker exec web nginx -s reload
+  listen: "reload web nginx"

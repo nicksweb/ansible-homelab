@@ -1,0 +1,49 @@
+---
+# Stage 2 of 2 (see ssh_harden) — fail2ban only, run and externally verified
+# as its own separate step by the calling orchestrator. Ported from
+# provisioning/binarylane/scripts/harden-fail2ban.sh. Built from the
+# script directly, NOT from playbooks/roles/bootstrap's jail.local — that
+# asset is stale (hardcoded foreign destemail, unparameterized ignoreip,
+# legacy [ssh]/[dropbear] jail names instead of the modern [sshd] filter).
+#
+# Pins banaction to the long-stable iptables-multiport rather than whatever
+# a given Ubuntu release ships as the fail2ban default — a fresh
+# ufw-enabled box + fail2ban's newer nftables action is a plausible source
+# of exactly the kind of self-lockout the two-stage design is meant to
+# catch early.
+
+- name: Write /etc/fail2ban/jail.local
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: "restart fail2ban"
+
+- name: Flush handlers so fail2ban restarts now, not at play end
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure fail2ban is enabled and running
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+  become: true
+
+- name: Confirm fail2ban is active
+  ansible.builtin.command: systemctl is-active fail2ban
+  become: true
+  register: fail2ban_harden_status
+  until: fail2ban_harden_status.rc == 0
+  retries: 5
+  delay: 2
+  changed_when: false
+
+- name: Ensure unattended-upgrades is enabled and running
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  become: true

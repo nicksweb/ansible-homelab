@@ -1,0 +1,5 @@
+tunnel: {{ cloudflared_connector_tunnel_id }}
+ingress:
+  - hostname: {{ cloudflared_connector_hostname }}
+    service: {{ cloudflared_connector_service }}
+  - service: http_status:404

@@ -1,0 +1,7 @@
+---
+- name: Restart mysql
+  ansible.builtin.systemd:
+    name: mysql
+    state: restarted
+  become: true
+  listen: "restart mysql"

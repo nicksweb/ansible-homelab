@@ -1,0 +1,7 @@
+---
+- name: Install Docker Engine and verify it works in this environment
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/docker_engine

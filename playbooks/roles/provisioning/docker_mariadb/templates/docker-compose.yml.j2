@@ -1,0 +1,20 @@
+services:
+  mariadb:
+    image: {{ docker_mariadb_image }}
+    container_name: mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - ./data:/var/lib/mysql
+    networks:
+      - {{ docker_mariadb_network }}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+networks:
+  {{ docker_mariadb_network }}:
+    external: true

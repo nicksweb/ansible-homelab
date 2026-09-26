@@ -1,0 +1,11 @@
+---
+# The config is a bind mount, so a changed file needs a restart to be read;
+# a changed .env needs a recreate to reach the container's environment.
+- name: Restart cloudflared container
+  community.docker.docker_compose_v2:
+    project_src: "{{ docker_cloudflared_dir }}"
+    state: present
+    recreate: always
+    wait: true
+    wait_timeout: 60
+  listen: "restart cloudflared container"

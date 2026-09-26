@@ -1,0 +1,45 @@
+---
+# Remove one vhost from one server: deletes its Cloudflare CNAME and UDM
+# record, tunnel route, web server config and cert (site content is kept),
+# then drops it from provisioning/inventory/host_vars/<server>/vhosts.yml.
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_remove.yml \
+#     -l web01 -e vhost=shop.example.com
+- name: Remove a vhost
+  hosts: provisioned
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Target exactly one server
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - vhost is defined and vhost is string
+        fail_msg: "Usage: -l <server> -e vhost=<hostname> (matched servers: {{ ansible_play_hosts_all | join(', ') }})"
+        quiet: true
+      run_once: true
+
+    - name: Keep the other entries, and mark this one absent for this run
+      ansible.builtin.set_fact:
+        vhosts_remaining: >-
+          {%- set out = [] -%}
+          {%- for v in vhosts -%}
+          {%-   set e = {'hostname': v} if v is string else v -%}
+          {%-   if (e.hostname | lower) != (vhost | lower | trim) -%}
+          {%-     set _ = out.append(v) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: This run's vhosts
+      ansible.builtin.set_fact:
+        vhosts: "{{ vhosts_remaining + [{'hostname': vhost | lower | trim, 'state': 'absent'}] }}"
+
+  roles:
+    - provisioning/vhosts
+
+  post_tasks:
+    - name: Drop it from the inventory
+      ansible.builtin.include_tasks: tasks/write_vhosts_file.yml
+      vars:
+        vhosts_file_list: "{{ vhosts_remaining }}"

@@ -1,0 +1,16 @@
+---
+# Converge every vhost declared in provisioning/inventory/host_vars/<server>/vhosts.yml
+# (DNS-01 cert, web server config, tunnel ingress, Cloudflare CNAME, UDM
+# records) — see playbooks/roles/provisioning/vhosts/defaults/main.yml for
+# the format. Safe to re-run any time; hosts with no vhosts are skipped.
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/vhosts.yml [-l web01]
+#
+# The provisioning destroy scripts run it with -e vhosts_teardown=true to
+# remove a server's DNS records before deleting it.
+- name: Converge declared vhosts
+  hosts: provisioned
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/vhosts

@@ -29,7 +29,7 @@ source "$PROVISIONING_ROOT/common/ssh.sh"
 : "${DEFAULT_DISK_GB:=30}"
 : "${ADMIN_USER:=localadmin}"
 : "${TIMEZONE:=Australia/Brisbane}"
-: "${PROVISIONING_SSH_KEY:=$HOME/.ssh/homelab_provisioning}"
+: "${PROVISIONING_SSH_KEY:=$HOME/.ssh/cipi}"
 : "${LETSENCRYPT_EMAIL:=}"  # optional; empty uses certbot --register-unsafely-without-email
 : "${UDM_NETWORK_ID:=}"                                # your UDM network's object id (Settings > Networks > ... > API), required for DHCP reservations/local DNS
 : "${UDM_RESERVATION_RANGE_START:=172.16.0.100}"      # static-reservation range, deliberately below the DHCP dynamic
@@ -37,6 +37,8 @@ source "$PROVISIONING_ROOT/common/ssh.sh"
 : "${BESZEL_HUB_URL:=}"                                # e.g. https://beszel.example.com — your Beszel hub, required unless --skip-beszel is always used
 : "${BESZEL_HUB_KEY:=}"                                # the hub's own SSH public key (not secret) — from the hub's Settings > Add System page
 : "${BESZEL_PORT:=45876}"
+: "${ENABLE_TAILSCALE:=false}"  # off by default — Proxmox containers already live on the internal LAN; Tailscale is for BinaryLane's public cloud VMs
+: "${TAILSCALE_TAG:=tag:proxmox}"  # must have a tagOwners entry in the tailnet ACL — OAuth-minted keys always carry a tag. Only kernel-TUN-less "userspace-networking" mode works on unprivileged LXC (no /dev/net/tun) unless you've added device passthrough (`pct set <vmid> -dev0 /dev/net/tun` as root@pam on the Proxmox host) yourself first.
 : "${API_AUTH_FILE:=$SRC_ROOT/.api-auth.env}"
 
 if [ -f "$PVE_TOOLKIT_ROOT/config.env" ]; then
@@ -82,6 +84,18 @@ load_beszel_creds() {
   BESZEL_TOKEN="$(sed -n 's/^BESZEL_UNIVERSAL_CODE=//p' "$API_AUTH_FILE" | head -n1)"
   [ -n "$BESZEL_TOKEN" ] || die "Could not parse BESZEL_UNIVERSAL_CODE from $API_AUTH_FILE"
   export BESZEL_TOKEN
+}
+
+load_tailscale_creds() {
+  # OAuth client credentials — this toolkit mints a fresh, tagged authkey
+  # per container at provisioning time (see common/tailscale.sh) rather
+  # than reusing one long-lived key.
+  [ -f "$API_AUTH_FILE" ] || die "Credential file not found: $API_AUTH_FILE"
+  TAILSCALE_CLIENTID="$(sed -n 's/^TAILSCALE_CLIENTID=//p' "$API_AUTH_FILE" | head -n1)"
+  TAILSCALE_CLIENTSECRET="$(sed -n 's/^TAILSCALE_CLIENTSECRET=//p' "$API_AUTH_FILE" | head -n1)"
+  [ -n "$TAILSCALE_CLIENTID" ] && [ -n "$TAILSCALE_CLIENTSECRET" ] \
+    || die "Could not parse TAILSCALE_CLIENTID/TAILSCALE_CLIENTSECRET from $API_AUTH_FILE"
+  export TAILSCALE_CLIENTID TAILSCALE_CLIENTSECRET
 }
 
 # ---------------------------------------------------------------------------

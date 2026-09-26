@@ -1,0 +1,35 @@
+---
+# Nginx Proxy Manager as a second entry point alongside the tunnel-only
+# `web` container. Ported from server-provisioning's
+# scripts/install-npm-docker.sh.
+#
+# The published 443 is open to everyone until docker_port_allowlist runs —
+# ufw can't filter it (Docker's own iptables rules are evaluated first).
+# The orchestrator always runs the allowlist straight after this.
+
+- name: Create the stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0755'
+  loop:
+    - "{{ docker_npm_dir }}"
+    - "{{ docker_npm_dir }}/data"
+    - "{{ docker_npm_dir }}/letsencrypt"
+
+- name: Write docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ docker_npm_dir }}/docker-compose.yml"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0644'
+
+- name: Start NPM
+  community.docker.docker_compose_v2:
+    project_src: "{{ docker_npm_dir }}"
+    state: present
+    wait: true
+    wait_timeout: 120

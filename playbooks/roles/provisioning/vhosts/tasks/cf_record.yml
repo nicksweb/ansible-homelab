@@ -1,0 +1,88 @@
+---
+# present: a proxied CNAME to this server's tunnel. Never overwrites a
+# non-CNAME record, nor a CNAME to some other target unless the vhost says
+# takeover: true.
+# absent: deletes the CNAME only if it still points at this server's tunnel.
+- name: "Cloudflare record for {{ vhosts_item.hostname }}"
+  delegate_to: localhost
+  become: false
+  vars:
+    vhosts_zone: "{{ vhosts_zone_of[vhosts_item.hostname] }}"
+    vhosts_cf_target: "{{ vhosts_tunnel_id }}.cfargotunnel.com"
+  block:
+    - name: "Look up {{ vhosts_item.hostname }}"
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/zones/{{ vhosts_zone }}/dns_records?name={{ vhosts_item.hostname }}"
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+      register: vhosts_cf_lookup
+      failed_when: false
+      no_log: true
+
+    - name: Lookup succeeded
+      ansible.builtin.assert:
+        that: vhosts_cf_lookup.status == 200
+        fail_msg: "Cloudflare DNS lookup for {{ vhosts_item.hostname }} failed: HTTP {{ vhosts_cf_lookup.status }} {{ vhosts_cf_lookup.json.errors | default('') }}"
+        quiet: true
+
+    - name: What's there now
+      ansible.builtin.set_fact:
+        vhosts_cf_cname: "{{ vhosts_cf_lookup.json.result | selectattr('type', 'equalto', 'CNAME') | first | default({}) }}"
+        vhosts_cf_other: "{{ vhosts_cf_lookup.json.result | rejectattr('type', 'equalto', 'CNAME') | map(attribute='type') | list }}"
+
+    - name: Refuse to overwrite a record this server doesn't own
+      ansible.builtin.assert:
+        that:
+          - vhosts_cf_other | length == 0
+          - vhosts_cf_cname | length == 0 or vhosts_cf_cname.content == vhosts_cf_target or vhosts_item.takeover
+        fail_msg: >-
+          {{ vhosts_item.hostname }} already has
+          {{ ('a ' ~ vhosts_cf_other | join('/') ~ ' record') if vhosts_cf_other | length > 0 else ('a CNAME to ' ~ vhosts_cf_cname.content | default('')) }}
+          in Cloudflare — refusing to overwrite it.
+          {{ '' if vhosts_cf_other | length > 0 else 'Add takeover: true to the vhost to repoint it to this server.' }}
+        quiet: true
+      when: vhosts_item.state == 'present'
+
+    - name: "Point {{ vhosts_item.hostname }} at the tunnel"
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/zones/{{ vhosts_zone }}/dns_records{{ ('/' ~ vhosts_cf_cname.id) if vhosts_cf_cname | length > 0 else '' }}"
+        method: "{{ 'PUT' if vhosts_cf_cname | length > 0 else 'POST' }}"
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+        body_format: json
+        body:
+          type: CNAME
+          name: "{{ vhosts_item.hostname }}"
+          content: "{{ vhosts_cf_target }}"
+          proxied: true
+          ttl: 1
+      register: vhosts_cf_write
+      failed_when: false
+      changed_when: true
+      no_log: true
+      when:
+        - vhosts_item.state == 'present'
+        - vhosts_cf_cname | length == 0 or vhosts_cf_cname.content != vhosts_cf_target or not vhosts_cf_cname.proxied
+
+    - name: "Delete {{ vhosts_item.hostname }} (it points at this server's tunnel)"
+      ansible.builtin.uri:
+        url: "{{ vhosts_cf_api }}/zones/{{ vhosts_zone }}/dns_records/{{ vhosts_cf_cname.id }}"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ vhosts_cf_token }}"
+      register: vhosts_cf_write
+      failed_when: false
+      changed_when: true
+      no_log: true
+      when:
+        - vhosts_item.state == 'absent'
+        - vhosts_tunnel_id | length > 0
+        - vhosts_cf_cname | length > 0
+        - vhosts_cf_cname.content == vhosts_cf_target
+
+    - name: Write succeeded
+      ansible.builtin.assert:
+        that: vhosts_cf_write.status == 200
+        fail_msg: "Cloudflare update for {{ vhosts_item.hostname }} failed: HTTP {{ vhosts_cf_write.status }} {{ vhosts_cf_write.json.errors | default('') }}"
+        quiet: true
+      when: vhosts_cf_write is not skipped

@@ -1,0 +1,11 @@
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    ServerName {{ lamp_stack_effective_welcome_fqdn }}
+    DocumentRoot /var/www/html/provision-test
+    ErrorLog ${APACHE_LOG_DIR}/provision-test.error.log
+    CustomLog ${APACHE_LOG_DIR}/provision-test.access.log combined
+    <Directory /var/www/html/provision-test>
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>

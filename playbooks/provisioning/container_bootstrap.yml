@@ -1,0 +1,13 @@
+---
+# Entry point for the container_bootstrap role. Connects as root — a stock
+# Proxmox Ubuntu LXC template has no other account yet. Everything AFTER
+# this point in a full container-provisioning chain connects as
+# container_bootstrap_admin_user instead (a separate play/playbook) — see
+# the plan doc's "two-play root-then-admin-user" note.
+- name: Bootstrap a freshly-created LXC container
+  hosts: target
+  remote_user: root
+  become: false
+  gather_facts: true
+  roles:
+    - provisioning/container_bootstrap

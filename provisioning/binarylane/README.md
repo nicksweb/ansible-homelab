@@ -25,6 +25,7 @@ Proxmox toolkit if you use both:
 |---|---|
 | `BINARYLANE_API_KEY` | Full BinaryLane account API access |
 | `CLOUDFLARE_API_TOKEN` | DNS edit + Tunnel edit |
+| `TAILSCALE_CLIENTID` / `TAILSCALE_CLIENTSECRET` | Tailscale OAuth client — mints a fresh, tagged authkey per server (see "Tailscale" below) |
 
 `lib/common.sh` also supports legacy per-toolkit fallback files
 (`<repo root>/.binarylane`, `binarylane/.cloudflare`) if you'd rather keep
@@ -55,6 +56,7 @@ hardened, DNS created, reboot-tested, and a record written to
 | `--cloudflare-hostname FQDN` | Public hostname routed through this server's own dedicated tunnel |
 | `--cloudflare-proxy on\|off` | Proxy mode for the base A record (default off — DNS-only, so direct SSH-by-hostname keeps working) |
 | `--enable-tls` | Let's Encrypt cert for the server's own base FQDN |
+| `--skip-tailscale` | Don't join the tailnet (default: joined, tagged `tag:binarylane`, Tailscale SSH on) |
 | `--skip-lamp` / `--skip-mysql` | Skip the LAMP install entirely, or install Apache/PHP without local MySQL |
 | `--db-only` / `--db-allow-from IP[,IP...]` | Standalone MySQL server, firewalled to exactly the given IP(s) |
 | `--skip-harden` | Skip SSH/firewall hardening (not recommended) |
@@ -84,14 +86,33 @@ before relying on the hostname.
 
 ## SSH access
 
-A dedicated Ed25519 key (`PROVISIONING_SSH_KEY`, default
-`~/.ssh/binarylane_provisioning_ed25519`) is created automatically on first
-use and injected via cloud-init. Password SSH and root login are disabled by
-`scripts/harden-ssh.sh` only after a second, independent SSH session has
-confirmed key auth works — hardening never runs blind. It runs in two
-externally-verified stages (`harden-ssh.sh` then `harden-fail2ban.sh`), with
-a reachability check after each, so a lockout is caught immediately after
-the specific change that caused it.
+`PROVISIONING_SSH_KEY` (default `~/.ssh/cipi` — the same admin key used
+across VM/container provisioning and BinaryLane systems, not a
+toolkit-specific generated key) is injected via cloud-init. If it doesn't
+exist yet, generate it first: `ssh-keygen -t ed25519 -f ~/.ssh/cipi`.
+Password SSH and root login are disabled by the `ssh_harden` role only
+after a second, independent SSH session has confirmed key auth works —
+hardening never runs blind. It runs in two externally-verified stages
+(`ssh_harden` then `fail2ban_harden`), with a reachability check after
+each, so a lockout is caught immediately after the specific change that
+caused it.
+
+## Tailscale
+
+Every server joins the tailnet by default (`--skip-tailscale` to opt out),
+tagged `tag:binarylane` (owner: `autogroup:admin` in the tailnet ACL) with
+Tailscale SSH enabled — installed *before* the SSH/firewall hardening stage
+above, so it's an already-working fallback access path if hardening ever
+misconfigures sshd/ufw. Each server gets its own freshly-minted, reusable,
+non-ephemeral authkey (via the `TAILSCALE_CLIENTID`/`TAILSCALE_CLIENTSECRET`
+OAuth client) rather than sharing one long-lived key across servers.
+`destroy-server.sh` removes the corresponding device from the tailnet.
+
+Change the tag with `TAILSCALE_TAG` in `config.env` — it must already have a
+`tagOwners` entry in the tailnet ACL (Tailscale rejects OAuth-minted keys for
+tags the policy doesn't recognize), and the OAuth client itself must be
+scoped (in the Tailscale admin console, Settings > OAuth clients) to manage
+that tag.
 
 ```bash
 ./bin/ssh-server.sh webserver01
@@ -138,19 +159,77 @@ since it belongs to exactly one server.
 
 ## Adding websites to a provisioned server
 
+Websites are **vhosts**, managed with Ansible for every server type — see
+[../README.md](../README.md#vhosts-ansible). From the repo root:
+
 ```bash
-./bin/add-site.sh webserver01 shop example.com 8.3
-./bin/add-site.sh webserver01 @ example.com php     # apex domain, highest installed PHP
-./bin/add-site.sh webserver02 status example.com none   # static site
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver01 -e vhost=shop.example.com -e php=8.3
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver01 -e vhost=example.com       # apex, highest PHP
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l webserver02 -e vhost=status.example.com -e php=none
 ```
 
-Creates a webroot + Apache vhost and wires Cloudflare DNS. Routing depends
-on how the server was provisioned: a server with `--cloudflare-tunnel` gets
-an ingress rule added to its own tunnel + a proxied CNAME; a server without
-one gets a direct A record (proxied by default; `--proxy off` for DNS-only,
-e.g. if you'll run `certbot --apache` yourself). The domain is validated
-against the live Cloudflare zone list first. Idempotent — re-running for the
-same hostname reuses the existing webroot/vhost/DNS record.
+On a LAMP server each vhost gets a webroot under
+`/var/www/html/sites/<fqdn>/public` with Apache HTTP and HTTPS vhosts in
+`/etc/apache2/vhosts.d/` (PHP-FPM unless `php=none`), its own DNS-01 cert,
+a route on the server's dedicated tunnel (created with the first vhost if
+the server was provisioned without `--cloudflare-tunnel`) and a proxied
+CNAME. Apache itself answers 80/443 directly — there's no proxy in front —
+so the UDM records point office clients straight at it.
+
+## Docker static-site servers (`--role docker`)
+
+An alternative to LAMP for hosting static sites: Docker, with everything in
+containers on two shared networks (`frontend`, `backend`):
+
+| Container | Published? | Reached via |
+|---|---|---|
+| `web` (nginx, one server block per site) | no | the tunnel (`http://web:80`) |
+| `mariadb` (no database created yet) | no | other containers on `backend` |
+| `cloudflared` (this server's own tunnel) | no | — |
+| `npm` (Nginx Proxy Manager, skip with `--no-npm`) | **443 only** | tunnel for `:81` admin / `:80` proxy; direct 443 restricted |
+
+```bash
+./bin/provision-server.sh --name web01 --role docker --plan std-2vcpu \
+  --cloudflare-tunnel --cloudflare-hostname web01-pilot.example.com
+```
+
+- **ufw allows SSH only.** Nothing listens on the host itself.
+- **NPM's 443 is restricted in the `DOCKER-USER` iptables chain**, not ufw
+  (Docker's own rules for published ports run before ufw sees the traffic).
+  Allowed: Cloudflare's published ranges (fetched live) plus
+  `TRUSTED_443_IPS` from `config.env` and any `--trusted-ip`. The rules
+  match only inbound traffic on the external interface, so containers'
+  own outbound HTTPS (NPM → Let's Encrypt, image pulls) is unaffected. A
+  systemd unit (`npm-443-fw-rules`) re-applies them at boot.
+- **NPM's admin UI is on a public tunnel hostname** (default
+  `nginx-<name>.<domain>`). Log in and set the admin account immediately
+  after provisioning; consider a Cloudflare Access policy in front of it.
+
+Day-to-day — sites are **vhosts**, managed with Ansible (see
+[../README.md](../README.md#vhosts-ansible)):
+
+```bash
+# from the repo root
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l web01 -e vhost=docs.example.com
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l web01 \
+  -e vhost=app.example.com -e service=http://grafana:3000       # proxy to a container instead
+./provisioning/binarylane/bin/deploy-site.sh web01 docs.example.com ./_site   # rsync a local build (--delete)
+./provisioning/binarylane/bin/allow-cloudflare-ips.sh web01 --extra-ip 203.0.113.7   # refresh ranges / add a trusted IP
+```
+
+Each vhost gets a static site in `web` (or a route to `service`), a
+tunnel route and proxied CNAME, a DNS-01 cert on the host, and a server
+block in NPM's custom config for the direct path. Once that direct path
+answers from the control host, the UDM gets `<server fqdn>` A → the public
+IP and `<vhost>` CNAME → `<server fqdn>`, so office clients go straight to
+the server (their public IP is in `TRUSTED_443_IPS`) instead of out and
+back through Cloudflare.
+
+The routes `provision-server.sh` creates itself (primary hostname, NPM
+admin/proxy) stay in `state/<name>.json` under `.cloudflare.tunnel_routes`;
+the cloudflared config is always re-rendered from those plus the declared
+vhosts (`docker_cloudflared` role), so it can't drift. `destroy-server.sh`
+removes both.
 
 ## Splitting DB and web servers
 
@@ -165,8 +244,8 @@ For a two-tier setup — dedicated DB server plus one or more app servers:
 ./bin/provision-server.sh --name db01 --region sin \
   --db-only --db-allow-from <app01's public IPv4 from its state file>
 
-# 3. Actual vhost content
-./bin/add-site.sh app01 app example.com php
+# 3. Actual vhost content (from the repo root)
+ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l app01 -e vhost=app.example.com
 ```
 
 `--db-only` skips Apache/PHP/certbot entirely and installs standalone MySQL,
@@ -200,7 +279,7 @@ re-applies — safe to run repeatedly, including for IPv6 ranges on a server
 that doesn't have IPv6 enabled yet (the rules are just inert until it does).
 phpMyAdmin connects over the local Unix socket (no new MySQL grant needed);
 enabling it also replaces the from-anywhere `ufw allow 80/443` rules that
-`harden-ssh.sh` leaves on every server with rules scoped to the same
+`ssh_harden` leaves on every server with rules scoped to the same
 allow-list as MySQL.
 
 Every server this toolkit creates has `ipv6: false` — no IPv6 address at
@@ -248,8 +327,8 @@ Idempotent — a rebuild under the same name detects the existing certificate.
 ./bin/destroy-server.sh webserver01 --yes
 ```
 
-Shows exactly what will be deleted (server, A record, tunnel/CNAME if
-applicable) and requires typing the FQDN back to confirm. Re-fetches the
+Shows exactly what will be deleted (server, A record, tunnel and every
+tunnel CNAME recorded in state, Tailscale device if applicable) and requires typing the FQDN back to confirm. Re-fetches the
 server by ID from BinaryLane and checks its name still matches local state
 before deleting. The provisioning record is updated in place with a
 `DESTROYED` block rather than removed.

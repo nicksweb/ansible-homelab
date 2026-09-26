@@ -1,0 +1,7 @@
+---
+- name: Deploy the MariaDB + phpMyAdmin + Traefik stack
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/mariadb_stack

@@ -1,0 +1,7 @@
+---
+- name: Install the LAMP stack
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/lamp_stack

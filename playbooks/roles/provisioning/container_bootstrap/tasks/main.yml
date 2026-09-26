@@ -1,0 +1,95 @@
+---
+# Baseline OS setup + creates the admin user. Runs connected AS ROOT (the
+# only account a stock Proxmox Ubuntu LXC template has) — no `become`
+# needed in this role, the play itself connects as root. Ported from
+# provisioning/proxmox/scripts/bootstrap-container.sh.
+#
+# NOT a wrapper around the existing bootstrap/common_baseline roles: those
+# assume an existing sudo user and (bootstrap) an interactive password
+# prompt. This role is what gets that first user into existence.
+
+- name: Require fqdn, admin_user, and an SSH public key
+  ansible.builtin.assert:
+    that:
+      - container_bootstrap_fqdn | length > 0
+      - container_bootstrap_admin_user | length > 0
+      - container_bootstrap_ssh_public_key | length > 0
+    fail_msg: container_bootstrap_fqdn, _admin_user, and _ssh_public_key are all required.
+
+- name: Create the admin user
+  ansible.builtin.user:
+    name: "{{ container_bootstrap_admin_user }}"
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    create_home: true
+    password_lock: true
+
+- name: Grant the admin user passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ container_bootstrap_admin_user }}"
+    content: "{{ container_bootstrap_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: '0440'
+    validate: "visudo -cf %s"
+
+- name: Authorize the provisioning SSH key for the admin user
+  ansible.posix.authorized_key:
+    user: "{{ container_bootstrap_admin_user }}"
+    key: "{{ container_bootstrap_ssh_public_key }}"
+    state: present
+
+- name: apt update + upgrade
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: yes
+    cache_valid_time: 3600
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ container_bootstrap_packages }}"
+    state: present
+
+- name: Set the timezone
+  community.general.timezone:
+    name: "{{ container_bootstrap_timezone }}"
+
+- name: Set the hostname
+  ansible.builtin.hostname:
+    name: "{{ container_bootstrap_fqdn }}"
+
+- name: Add the FQDN to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "127.0.1.1 {{ container_bootstrap_fqdn }} {{ container_bootstrap_fqdn.split('.')[0] }}"
+    regexp: '^127\.0\.1\.1\s'
+
+- name: Configure unattended-upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable unattended-upgrades
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  failed_when: false
+
+- name: Allow OpenSSH through ufw
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+
+- name: Enable ufw
+  # SSH only for now — HTTP/HTTPS get added when a site is actually
+  # configured (site_vhost / lamp_stack / mariadb_stack roles), matching
+  # the original script's minimal-at-bootstrap footprint.
+  community.general.ufw:
+    state: enabled

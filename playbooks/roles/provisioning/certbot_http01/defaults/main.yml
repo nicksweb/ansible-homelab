@@ -1,0 +1,6 @@
+---
+certbot_http01_fqdn: ""
+
+# Optional. Empty uses certbot's --register-unsafely-without-email (no
+# renewal-failure notification emails).
+certbot_http01_email: ""

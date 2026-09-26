@@ -1,0 +1,10 @@
+---
+# Run only after the calling orchestrator has independently confirmed SSH
+# is still reachable following ssh_harden.yml — see that playbook's role
+# header for why these two stay separate invocations.
+- name: fail2ban hardening (stage 2 of 2)
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/fail2ban_harden

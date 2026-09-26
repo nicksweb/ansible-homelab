@@ -1,0 +1,56 @@
+---
+# Creates a webroot + Apache vhost for one hostname, in one of two
+# conventions used across the two provisioning toolkits (site_vhost_style).
+# Ported from provisioning/proxmox/scripts/install-test-vhost.sh
+# (sites_available) and the vhost portion of
+# provisioning/binarylane/scripts/add-site-remote.sh (vhosts_d) — that
+# script's inline-Python Cloudflare ingress YAML surgery is NOT ported
+# here; the tunnel_ingress role (full-rewrite-from-a-list) replaces it
+# entirely. Call this role once per hostname; the caller loops.
+
+- name: Require a hostname
+  ansible.builtin.assert:
+    that: site_vhost_hostname | length > 0
+    fail_msg: site_vhost_hostname is required.
+
+- name: Check whether Apache is already installed
+  ansible.builtin.stat:
+    path: /usr/sbin/apache2
+  register: site_vhost_apache_present
+
+- name: Install Apache
+  when: not site_vhost_apache_present.stat.exists
+  become: true
+  block:
+    - name: apt update
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install apache2
+      ansible.builtin.apt:
+        name: apache2
+        state: present
+
+- name: sites_available style
+  when: site_vhost_style == "sites_available"
+  include_tasks: sites_available.yml
+
+- name: vhosts_d style
+  when: site_vhost_style == "vhosts_d"
+  include_tasks: vhosts_d.yml
+
+- name: Validate the Apache config
+  ansible.builtin.command: apache2ctl configtest
+  become: true
+  changed_when: false
+
+- name: Ensure Apache is enabled and running
+  ansible.builtin.systemd:
+    name: apache2
+    enabled: true
+    state: started
+  become: true
+
+- name: Reload Apache now if any vhost config changed
+  ansible.builtin.meta: flush_handlers

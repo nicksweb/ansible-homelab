@@ -1,0 +1,9 @@
+---
+# Shared settings for every server in the provisioned inventory. Per-server
+# vhosts go in host_vars/<name>/vhosts.yml next to this directory
+# (gitignored — real hostnames never go in git).
+
+# The same gitignored credentials file the bash toolkits read.
+prov_api_auth_file: "{{ inventory_dir }}/../../.api-auth.env"
+
+vhosts: []

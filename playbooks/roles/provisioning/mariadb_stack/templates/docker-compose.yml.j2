@@ -1,0 +1,64 @@
+services:
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./data/mariadb:/var/lib/mysql
+    ports:
+      - "{{ mariadb_stack_db_port }}:{{ mariadb_stack_db_port }}"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mariadb
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI}
+      UPLOAD_LIMIT: 64M
+    networks:
+      - backend
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=web"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+  traefik:
+    # Pinned to a version confirmed to auto-negotiate the Docker API
+    # version rather than hardcoding an old one — Docker Engine 29.x
+    # raised its minimum supported API version to 1.44 and rejects
+    # anything older; every Traefik release before v3.6.1 hardcodes a
+    # stale 1.24 in its Docker provider client and silently discovers zero
+    # containers as a result.
+    image: traefik:v3.6.1
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:8080"
+    ports:
+      # Bound to loopback only — reachable from nginx on this same host,
+      # never directly from the LAN. nginx is the one and only entry point.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge

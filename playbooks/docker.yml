@@ -1,5 +1,15 @@
 - hosts: docker
   become: yes
+
+  vars:
+    # ntp_manage_config defaults to false in this role — without it, NTP
+    # gets installed but the config file (and therefore the actual server
+    # list) is never written. ntp_area: au expands to the standard
+    # 0-3.au.pool.ntp.org servers used everywhere else in this repo.
+    ntp_manage_config: true
+    ntp_area: au
+    ntp_timezone: Australia/Brisbane
+
   roles:
     - geerlingguy.docker
     - geerlingguy.ntp

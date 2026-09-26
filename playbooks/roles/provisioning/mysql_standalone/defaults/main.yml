@@ -1,0 +1,9 @@
+---
+# Comma-separated or list form both work — normalized in tasks/main.yml.
+# Typically the app server's own public/tailnet IP(s), never 0.0.0.0/0.
+mysql_standalone_allowed_ips: []
+
+mysql_standalone_db_name: appdb
+mysql_standalone_db_user: appuser
+
+mysql_standalone_credentials_file: /etc/mysql-provisioning-credentials.env

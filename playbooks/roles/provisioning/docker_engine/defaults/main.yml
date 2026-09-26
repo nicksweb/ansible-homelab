@@ -1,0 +1,5 @@
+---
+# Shared external Docker networks to create after install. Compose stacks
+# join these instead of getting their own, so containers from different
+# stacks reach each other by name (e.g. cloudflared -> web, npm -> web).
+docker_engine_networks: []

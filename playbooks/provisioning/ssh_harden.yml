@@ -1,0 +1,7 @@
+---
+- name: SSH + firewall hardening (stage 1 of 2)
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/ssh_harden

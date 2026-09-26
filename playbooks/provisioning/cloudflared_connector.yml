@@ -1,0 +1,17 @@
+---
+# Entry point for the cloudflared_connector role. Invoked by the shared
+# Cloudflare Tunnel API-orchestration script (provisioning/*/install-
+# cloudflare-tunnel.sh) after it has created/reused the tunnel and fetched
+# its connector token via the Cloudflare API.
+#
+# Example:
+#   ansible-playbook -i "$TMP_INV" playbooks/provisioning/cloudflared_connector.yml \
+#     -e cloudflared_connector_tunnel_id=<id> \
+#     -e cloudflared_connector_hostname=<fqdn> \
+#     --extra-vars @/path/to/one-shot-token.json
+- name: Install and configure the cloudflared tunnel connector
+  hosts: target
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/cloudflared_connector

@@ -1,0 +1,9 @@
+<VirtualHost *:443>
+    ServerName {{ site_vhost_hostname }}
+    DocumentRoot {{ site_vhost_effective_webroot }}
+    SSLEngine on
+    SSLCertificateFile {{ site_vhost_cert_dir }}/fullchain.pem
+    SSLCertificateKeyFile {{ site_vhost_cert_dir }}/privkey.pem
+    ErrorLog ${APACHE_LOG_DIR}/{{ site_vhost_conf_name }}.error.log
+    CustomLog ${APACHE_LOG_DIR}/{{ site_vhost_conf_name }}.access.log combined
+</VirtualHost>

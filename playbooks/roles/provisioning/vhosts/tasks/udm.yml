@@ -1,0 +1,45 @@
+---
+# Static DNS on the UDM, so LAN clients go straight to the server. A record
+# is only published once the direct path is proven, and withdrawn when it
+# isn't — LAN clients then fall back to Cloudflare rather than breaking.
+- name: UDM static DNS
+  delegate_to: localhost
+  become: false
+  block:
+    - name: List the UDM's static DNS records
+      ansible.builtin.uri:
+        url: "https://{{ vhosts_udm_host }}/proxy/network/v2/api/site/{{ vhosts_udm_site }}/static-dns"
+        headers:
+          X-API-KEY: "{{ vhosts_udm_key }}"
+        validate_certs: false
+      register: vhosts_udm_list
+      failed_when: false
+      no_log: true
+
+    - name: UDM list succeeded
+      ansible.builtin.assert:
+        that: vhosts_udm_list.status == 200
+        fail_msg: "UDM static-dns list failed: HTTP {{ vhosts_udm_list.status }}"
+        quiet: true
+
+    - name: Plan the records
+      ansible.builtin.set_fact:
+        vhosts_udm_by_key: "{{ dict(vhosts_udm_list.json | map(attribute='key') | zip(vhosts_udm_list.json)) }}"
+        vhosts_udm_plan: >-
+          {%- set out = [] -%}
+          {%- if prov_platform == 'binarylane' -%}
+          {%-   set _ = out.append({'key': prov_fqdn, 'type': 'A', 'value': prov_ip, 'want': not vhosts_teardown}) -%}
+          {%- endif -%}
+          {%- for v in vhosts_list -%}
+          {%-   set want = not vhosts_teardown and v.state == 'present' and v.udm
+                           and v.hostname in (vhosts_direct_ok | default([])) -%}
+          {%-   set _ = out.append({'key': v.hostname, 'type': 'CNAME', 'value': prov_fqdn, 'want': want}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Apply each record
+      ansible.builtin.include_tasks: udm_record.yml
+      loop: "{{ vhosts_udm_plan }}"
+      loop_control:
+        loop_var: vhosts_rec
+        label: "{{ vhosts_rec.key }} {{ vhosts_rec.type }} {{ vhosts_rec.value }} ({{ 'want' if vhosts_rec.want else 'remove' }})"

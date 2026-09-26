@@ -1,0 +1,9 @@
+---
+# Restrict one Docker-PUBLISHED port to a CIDR set.
+docker_port_allowlist_port: 443
+docker_port_allowlist_rule_name: ""   # e.g. npm-443 — tags the rules, names the script/unit
+docker_port_allowlist_cidrs: []       # IPv4 and/or IPv6 CIDRs/addresses
+
+# The interface inbound traffic arrives on. Empty = the default-route
+# interface, detected at run time.
+docker_port_allowlist_interface: ""

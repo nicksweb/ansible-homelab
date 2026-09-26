@@ -10,3 +10,6 @@ roles:
 collections:
   - name: ansible.posix
   - name: community.general
+  - name: community.mysql
+  - name: community.docker
+  - name: community.crypto

@@ -6,7 +6,7 @@
 # incremental-update path), so widening access on a live db-only server goes
 # through this script instead. Idempotent: re-running with the same IPs is a
 # no-op; the existing (and any new) IPs are always re-passed in full to
-# install-mysql-standalone.sh / install-phpmyadmin.sh, both of which are
+# the mysql_standalone / phpmyadmin Ansible roles, both of which are
 # themselves idempotent per-IP.
 #
 # Usage: db-allow-ip.sh <name> <ip[,ip...]> [--phpmyadmin]
@@ -17,6 +17,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/common.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 NAME="${1:?usage: db-allow-ip.sh <name> <ip[,ip...]> [--phpmyadmin]}"
@@ -47,18 +49,18 @@ echo "Final allow-list:    $MERGED_CSV"
 echo "phpMyAdmin:           $( $WANT_PMA && echo "install/update, restricted to the final allow-list" || ( [ "$PMA_ENABLED" = "true" ] && echo "already enabled — its allow-list will be widened too" || echo "not requested, not touched" ) )"
 echo "============================================================"
 
-SSH_OPTS=(-i "$PROVISIONING_SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes "${SSH_MULTIPLEX_OPTS[@]}")
-
-log "Re-running install-mysql-standalone.sh on $NAME with the full allow-list..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/install-mysql-standalone.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-mysql-standalone.sh"
-ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-mysql-standalone.sh && /tmp/install-mysql-standalone.sh '$MERGED_CSV' && rm -f /tmp/install-mysql-standalone.sh" \
-  || die "install-mysql-standalone.sh failed on $NAME"
+log "Re-applying mysql_standalone (via Ansible) on $NAME with the full allow-list..."
+MYSQL_VARS="$(jq -n --arg ips "$MERGED_CSV" '{mysql_standalone_allowed_ips:$ips}')"
+ansible_run_playbook "playbooks/provisioning/mysql_standalone.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$MYSQL_VARS" \
+  || die "mysql_standalone Ansible role failed on $NAME"
+unset MYSQL_VARS
 
 if $WANT_PMA || [ "$PMA_ENABLED" = "true" ]; then
-  log "Running install-phpmyadmin.sh on $NAME with the full allow-list..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-phpmyadmin.sh" "$ADMIN_USER@$PUBLIC_IP:/tmp/install-phpmyadmin.sh"
-  ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" "chmod +x /tmp/install-phpmyadmin.sh && /tmp/install-phpmyadmin.sh '$MERGED_CSV' && rm -f /tmp/install-phpmyadmin.sh" \
-    || die "install-phpmyadmin.sh failed on $NAME"
+  log "Applying phpmyadmin (via Ansible) on $NAME with the full allow-list..."
+  PMA_VARS="$(jq -n --arg ips "$MERGED_CSV" '{phpmyadmin_allowed_ips:$ips}')"
+  ansible_run_playbook "playbooks/provisioning/phpmyadmin.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$PMA_VARS" \
+    || die "phpmyadmin Ansible role failed on $NAME"
+  unset PMA_VARS
   PMA_ENABLED=true
 fi
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict MariaDB's Docker-published port to the internal LAN (DOCKER-USER chain)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mariadb-fw-rules.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

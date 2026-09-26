@@ -1,0 +1,18 @@
+---
+beszel_agent_hub_url: ""
+
+# The hub's own SSH public key (from its Settings > Add System page) — NOT
+# secret, safe as a plain var/argument. The agent binary hard-requires this
+# to even start, regardless of an otherwise-valid token (confirmed upstream
+# gap, henrygd/beszel#1435).
+beszel_agent_hub_key: ""
+
+beszel_agent_port: 45876
+
+# The universal registration token. Secret — pass via extra-vars file, not
+# literal -e (see tailscale_join's defaults for the rationale). Note this
+# role can only make the SAME guarantee the original script did: never
+# touches the control host's disk/logs. Beszel's own installer writes it
+# into its systemd unit's Environment= line in plaintext ON THE TARGET
+# regardless — that's upstream's design, not something this role controls.
+beszel_agent_token: ""

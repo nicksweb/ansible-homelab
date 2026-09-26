@@ -1,0 +1,36 @@
+---
+# Rewrites /etc/cloudflared/config.yml from a full, caller-supplied list of
+# hostnames (tunnel_ingress_hostnames) and reloads the service. Deliberately
+# a full-desired-state rewrite, not incremental/sed-based editing — the
+# caller always supplies the complete hostname list from its own state, so
+# this can't drift out of sync the way patching an existing file could.
+# Ported from provisioning/proxmox/scripts/update-tunnel-ingress.sh.
+
+- name: Require a tunnel id
+  ansible.builtin.assert:
+    that: tunnel_ingress_tunnel_id | length > 0
+    fail_msg: tunnel_ingress_tunnel_id is required.
+
+- name: Write cloudflared ingress config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: /etc/cloudflared/config.yml
+    owner: root
+    group: root
+    mode: '0644'
+    validate: "cloudflared tunnel --config %s ingress validate"
+  notify: "reload cloudflared"
+
+- name: Flush handlers so the reload happens now, not at play end
+  ansible.builtin.meta: flush_handlers
+
+- name: Confirm cloudflared is active after the config update
+  # systemctl is-active exits 0 only when the unit is genuinely active, so
+  # the command module's normal rc-based pass/fail is exactly what we want —
+  # until/retries handles it coming back up after the reload/restart above.
+  ansible.builtin.command: systemctl is-active cloudflared
+  register: tunnel_ingress_status
+  changed_when: false
+  until: tunnel_ingress_status.rc == 0
+  retries: 3
+  delay: 2

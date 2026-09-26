@@ -1,0 +1,83 @@
+---
+- name: Only servers with a web stack take vhosts
+  ansible.builtin.assert:
+    that: prov_role in ['docker-static', 'lamp', 'web-no-local-db', 'lxc']
+    fail_msg: "{{ inventory_hostname }} is a '{{ prov_role }}' server, which has no web server to put vhosts on."
+    quiet: true
+
+- name: Which web stack this server runs
+  ansible.builtin.set_fact:
+    vhosts_lamp: "{{ prov_role in ['lamp', 'web-no-local-db'] }}"
+
+- name: Normalise the vhost list
+  ansible.builtin.set_fact:
+    vhosts_list: >-
+      {%- set out = [] -%}
+      {%- for v in vhosts -%}
+      {%-   set e = {'hostname': v} if v is string else v -%}
+      {%-   set _ = out.append({
+              'hostname': e.hostname | default('') | string | lower | trim,
+              'state': 'absent' if vhosts_teardown else e.state | default('present'),
+              'service': e.service | default('') | string,
+              'php': e.php | default('') | string,
+              'udm': e.udm | default(vhosts_udm) | bool,
+              'takeover': e.takeover | default(false) | bool}) -%}
+      {%- endfor -%}
+      {{ out }}
+    vhosts_base_names: "{{ prov_base_routes | map(attribute='hostname') | list }}"
+
+- name: Split into present and absent
+  ansible.builtin.set_fact:
+    vhosts_present: "{{ vhosts_list | selectattr('state', 'equalto', 'present') | list }}"
+    vhosts_absent: "{{ vhosts_list | selectattr('state', 'equalto', 'absent') | list }}"
+
+- name: Check each entry
+  ansible.builtin.assert:
+    that:
+      - item.hostname is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$')
+      - item.state in ['present', 'absent']
+      - item.hostname not in vhosts_base_names
+      - item.service == '' or prov_role == 'docker-static'
+      - item.service == '' or item.service is match('^https?://[A-Za-z0-9._-]+(:[0-9]+)?/?$')
+      - item.php == '' or vhosts_lamp
+      - item.php == '' or item.php is match('^(none|highest|[0-9]+\.[0-9]+)$')
+    fail_msg: >-
+      Bad vhost entry {{ item }}. Needs a valid lowercase hostname and state
+      present|absent; must not repeat a hostname the provisioning script
+      already routes ({{ vhosts_base_names | join(', ') }}); `service`
+      (http://container:port) is only for docker-static servers, `php`
+      (none|highest|8.3) only for LAMP servers.
+    quiet: true
+  loop: "{{ vhosts_list }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+
+- name: No hostname listed twice
+  ansible.builtin.assert:
+    that: vhosts_list | map(attribute='hostname') | unique | list | length == vhosts_list | length
+    fail_msg: "A hostname appears more than once in {{ inventory_hostname }}'s vhosts."
+    quiet: true
+
+- name: No hostname already served by another server in the inventory
+  ansible.builtin.assert:
+    that: item.hostname not in vhosts_claimed_elsewhere
+    fail_msg: "{{ item.hostname }} is already served by {{ vhosts_claimed_elsewhere[item.hostname] | default('') }} — remove it there first."
+    quiet: true
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  vars:
+    vhosts_claimed_elsewhere: >-
+      {%- set out = {} -%}
+      {%- for h in groups['provisioned'] | difference([inventory_hostname]) -%}
+      {%-   for r in hostvars[h].prov_base_routes | default([]) -%}
+      {%-     set _ = out.update({r.hostname: h}) -%}
+      {%-   endfor -%}
+      {%-   for v in hostvars[h].vhosts | default([]) -%}
+      {%-     set e = {'hostname': v} if v is string else v -%}
+      {%-     if e.state | default('present') == 'present' -%}
+      {%-       set _ = out.update({e.hostname | lower: h}) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}

@@ -1,0 +1,9 @@
+<?php
+$cfg['blowfish_secret'] = '{{ phpmyadmin_blowfish_secret }}';
+$i = 0;
+$i++;
+$cfg['Servers'][$i]['auth_type'] = 'cookie';
+$cfg['Servers'][$i]['socket'] = '/var/run/mysqld/mysqld.sock';
+$cfg['Servers'][$i]['AllowNoPassword'] = false;
+$cfg['UploadDir'] = '';
+$cfg['SaveDir'] = '';

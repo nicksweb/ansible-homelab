@@ -1,0 +1,7 @@
+---
+- name: Install phpMyAdmin, restricted to given client IPs
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/phpmyadmin

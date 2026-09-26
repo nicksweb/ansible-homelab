@@ -1,0 +1,23 @@
+---
+- name: Write host_vars/<server>/vhosts.yml
+  delegate_to: localhost
+  become: false
+  vars:
+    vhosts_file: "{{ inventory_dir }}/host_vars/{{ inventory_hostname }}/vhosts.yml"
+  block:
+    - name: Ensure the host_vars directory exists
+      ansible.builtin.file:
+        path: "{{ vhosts_file | dirname }}"
+        state: directory
+        mode: '0755'
+
+    - name: Write the vhost list
+      ansible.builtin.copy:
+        dest: "{{ vhosts_file }}"
+        mode: '0644'
+        content: |
+          # Vhosts for {{ inventory_hostname }} — the source of truth for what it serves.
+          # Edit freely and run playbooks/provisioning/vhosts.yml; vhost_add.yml and
+          # vhost_remove.yml rewrite this file (comments other than this header are lost).
+          # Format: playbooks/roles/provisioning/vhosts/defaults/main.yml
+          {{ {'vhosts': vhosts_file_list} | to_nice_yaml(indent=2, sort_keys=false) }}

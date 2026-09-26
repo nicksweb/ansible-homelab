@@ -1,0 +1,34 @@
+---
+# Every hostname a provisioned server serves beyond the ones its
+# provisioning script set up, from
+# provisioning/inventory/host_vars/<server>/vhosts.yml:
+#
+#   vhosts:
+#     - hostname: shop.example.com       # docker: static site in the `web` container
+#     - hostname: grafana.example.com
+#       service: http://grafana:3000     # docker only: proxy to another container instead
+#     - hostname: static.example.com
+#       php: none                        # LAMP only: none | highest (default) | 8.3
+#     - hostname: internal.example.com
+#       udm: false                       # public only — no LAN shortcut on the UDM
+#     - hostname: moved.example.com
+#       takeover: true                   # repoint a CNAME that currently targets another tunnel
+#     - hostname: old.example.com
+#       state: absent                    # remove its DNS, routing and config (content kept)
+#
+# A bare string is shorthand for {hostname: <string>}.
+vhosts: []
+
+# Destroy scripts only: remove every vhost's Cloudflare and UDM records (and
+# a cloud server's UDM host record) without touching the server itself.
+vhosts_teardown: false
+
+# Default for each vhost's `udm`: publish it on the UDM so LAN clients reach
+# the server directly rather than out and back through Cloudflare.
+vhosts_udm: true
+
+# docker-static servers: where a vhost without `service` is served from.
+vhosts_default_service: "http://web:80"
+
+vhosts_cf_api: https://api.cloudflare.com/client/v4
+vhosts_udm_site: default

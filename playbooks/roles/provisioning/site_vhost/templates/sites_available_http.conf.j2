@@ -1,0 +1,6 @@
+<VirtualHost *:80>
+    ServerName {{ site_vhost_hostname }}
+    DocumentRoot {{ site_vhost_effective_webroot }}
+    ErrorLog ${APACHE_LOG_DIR}/{{ site_vhost_conf_name }}.error.log
+    CustomLog ${APACHE_LOG_DIR}/{{ site_vhost_conf_name }}.access.log combined
+</VirtualHost>

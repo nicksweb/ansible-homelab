@@ -1,0 +1,7 @@
+---
+- name: Issue a Let's Encrypt certificate via DNS-01 (Cloudflare)
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/certbot_dns01

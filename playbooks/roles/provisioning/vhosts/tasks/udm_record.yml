@@ -1,0 +1,55 @@
+---
+# The static-dns API has no working in-place update (PUT always rejects with
+# StaticDnsRecordAlreadyExists), so a changed record is deleted and re-made.
+# A record we don't want is only deleted if it still points where we would
+# have pointed it — anything else is someone else's.
+- name: "UDM record {{ vhosts_rec.key }}"
+  delegate_to: localhost
+  become: false
+  vars:
+    vhosts_udm_existing: "{{ vhosts_udm_by_key[vhosts_rec.key] | default({}) }}"
+    vhosts_udm_matches: "{{ vhosts_udm_existing | length > 0 and vhosts_udm_existing.value == vhosts_rec.value and vhosts_udm_existing.record_type == vhosts_rec.type }}"
+  block:
+    - name: "Remove {{ vhosts_rec.key }}"
+      ansible.builtin.uri:
+        url: "https://{{ vhosts_udm_host }}/proxy/network/v2/api/site/{{ vhosts_udm_site }}/static-dns/{{ vhosts_udm_existing._id }}"
+        method: DELETE
+        headers:
+          X-API-KEY: "{{ vhosts_udm_key }}"
+        validate_certs: false
+        status_code: [200, 204]
+      no_log: true
+      changed_when: true
+      when: >-
+        vhosts_udm_existing | length > 0 and
+        ((vhosts_rec.want and not vhosts_udm_matches) or (not vhosts_rec.want and vhosts_udm_existing.value == vhosts_rec.value))
+
+    - name: "Create {{ vhosts_rec.key }} {{ vhosts_rec.type }} {{ vhosts_rec.value }}"
+      ansible.builtin.uri:
+        url: "https://{{ vhosts_udm_host }}/proxy/network/v2/api/site/{{ vhosts_udm_site }}/static-dns"
+        method: POST
+        headers:
+          X-API-KEY: "{{ vhosts_udm_key }}"
+        validate_certs: false
+        body_format: json
+        body:
+          key: "{{ vhosts_rec.key }}"
+          record_type: "{{ vhosts_rec.type }}"
+          value: "{{ vhosts_rec.value }}"
+          enabled: true
+          ttl: 0
+          port: 0
+          priority: 0
+          weight: 0
+      register: vhosts_udm_create
+      failed_when: false
+      changed_when: true
+      no_log: true
+      when: vhosts_rec.want and not vhosts_udm_matches
+
+    - name: Create succeeded
+      ansible.builtin.assert:
+        that: vhosts_udm_create.status == 200
+        fail_msg: "UDM record {{ vhosts_rec.key }} failed: HTTP {{ vhosts_udm_create.status }} {{ vhosts_udm_create.json | default('') }}"
+        quiet: true
+      when: vhosts_udm_create is not skipped

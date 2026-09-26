@@ -1,0 +1,14 @@
+services:
+  web:
+    image: {{ docker_web_static_image }}
+    container_name: web
+    restart: unless-stopped
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./sites:/var/www/sites:ro
+    networks:
+      - {{ docker_web_static_network }}
+
+networks:
+  {{ docker_web_static_network }}:
+    external: true

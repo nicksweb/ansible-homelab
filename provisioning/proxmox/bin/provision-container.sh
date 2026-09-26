@@ -14,14 +14,19 @@
 #   --public-hostname FQDN[,FQDN...]  Expose this container externally via a dedicated Cloudflare
 #                            Tunnel. Accepts a comma-separated list to attach multiple public
 #                            hostnames at creation time (any domain the Cloudflare token can see) —
-#                            the first becomes the primary; the rest are added the same way
-#                            add-vhost.sh adds one to an existing container (shared tunnel, own
-#                            CNAME + local override + vhost each).
+#                            the first becomes the primary; the rest are added as vhosts via
+#                            playbooks/provisioning/vhost_add.yml (shared tunnel, own CNAME +
+#                            cert + UDM record + Apache vhost each).
 #   --enable-tls          Issue a real Let's Encrypt cert for the container's *internal* FQDN via
 #                          DNS-01 (Cloudflare API) — works even though .in.example.com isn't
 #                          publicly resolvable, since DNS-01 only needs to create a TXT record.
 #   --skip-web            Don't install the minimal Apache test vhost (default: installed)
 #   --skip-beszel          Don't install the Beszel monitoring agent (default: installed)
+#   --enable-tailscale      Join the tailnet, tagged $TAILSCALE_TAG, Tailscale SSH on (default: not joined —
+#                          Proxmox containers already live on the internal LAN; Tailscale is mainly for
+#                          BinaryLane's public cloud VMs). Unprivileged LXC has no /dev/net/tun, so this
+#                          falls back to Tailscale's userspace-networking mode automatically unless you've
+#                          already added device passthrough yourself (see lib/common.sh TAILSCALE_TAG comment).
 #   --dry-run            Print the plan and exit, no resources created
 #   --yes                Skip the interactive confirmation prompt
 set -uo pipefail
@@ -33,10 +38,15 @@ source "$HERE/lib/common.sh"
 source "$PROVISIONING_ROOT/common/cloudflare.sh"
 # shellcheck disable=SC1091
 source "$PROVISIONING_ROOT/common/udm.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/tailscale.sh"
+# shellcheck disable=SC1091
+source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
 HOSTNAME_ARG="" CORES="$DEFAULT_CORES" MEMORY="$DEFAULT_MEMORY_MB" DISK="$DEFAULT_DISK_GB"
 NODE_ARG="" VLAN_TAG="$PVE_VLAN_TAG" PUBLIC_HOSTNAME_RAW="" ENABLE_TLS=false SKIP_WEB=false SKIP_BESZEL=false DRY_RUN=false ASSUME_YES=false
+SKIP_TAILSCALE=true; [ "$ENABLE_TAILSCALE" = "true" ] && SKIP_TAILSCALE=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,6 +57,7 @@ while [ $# -gt 0 ]; do
     --enable-tls) ENABLE_TLS=true; shift ;;
     --skip-web) SKIP_WEB=true; shift ;;
     --skip-beszel) SKIP_BESZEL=true; shift ;;
+    --enable-tailscale) SKIP_TAILSCALE=false; shift ;;
     --disk) DISK="${2%G}"; shift 2 ;;
     --node) NODE_ARG="$2"; shift 2 ;;
     --vlan) VLAN_TAG="$2"; shift 2 ;;
@@ -58,9 +69,9 @@ done
 
 # Split --public-hostname on commas. PUBLIC_HOSTNAME (the first entry) drives
 # every existing single-hostname code path below unchanged; anything after
-# it is attached post-creation via the same add-vhost.sh logic used to add a
-# hostname to an already-existing container — shared tunnel, own CNAME +
-# local override + vhost each, not a second tunnel per hostname.
+# it is attached post-creation as a vhost (vhost_add.yml), the same way one
+# is added to an already-existing container — shared tunnel, own CNAME +
+# cert + UDM record + vhost each, not a second tunnel per hostname.
 PUBLIC_HOSTNAMES=()
 if [ -n "$PUBLIC_HOSTNAME_RAW" ]; then
   IFS=',' read -ra _raw_hosts <<< "$PUBLIC_HOSTNAME_RAW"
@@ -123,10 +134,10 @@ if [ "${#PUBLIC_HOSTNAMES[@]}" -gt 0 ]; then
     OTHER_STATUS="$(jq -r '.status' "$f")"
     [ "$OTHER_STATUS" = "DESTROYED" ] && continue
     OTHER_PUBLIC="$(jq -r '.cloudflare.public_hostname // empty' "$f")"
-    OTHER_ADDITIONAL="$(jq -r '.cloudflare.additional_hostnames[]?.hostname // empty' "$f")"
+    OTHER_ADDITIONAL="$(jq -r '.cloudflare.additional_hostnames[]?.hostname // empty' "$f"; ansible_declared_vhosts "$OTHER_NAME")"
     for want in "${PUBLIC_HOSTNAMES[@]}"; do
       if [ "$OTHER_PUBLIC" = "$want" ] || printf '%s\n' "$OTHER_ADDITIONAL" | grep -qx "$want"; then
-        die "'$want' is already in use by '$OTHER_NAME' (status: $OTHER_STATUS). Proceeding would silently steal its Cloudflare CNAME and local DNS override. Destroy '$OTHER_NAME' first, add this hostname to it with add-vhost.sh instead, or pick a different --public-hostname."
+        die "'$want' is already in use by '$OTHER_NAME' (status: $OTHER_STATUS). Proceeding would silently steal its Cloudflare CNAME and local DNS override. Destroy '$OTHER_NAME' first, add this hostname to it as a vhost (playbooks/provisioning/vhost_add.yml) instead, or pick a different --public-hostname."
       fi
     done
   done
@@ -175,6 +186,8 @@ MAC_ADDR="$(printf '02:%02x:%02x:%02x:%02x:%02x' $((RANDOM%256)) $((RANDOM%256))
 RESERVED_IP="$(find_free_reservation_ip "$UDM_RESERVATION_RANGE_START" "$UDM_RESERVATION_RANGE_END")" \
   || die "No free IP in the reservation range $UDM_RESERVATION_RANGE_START-$UDM_RESERVATION_RANGE_END"
 log "Reserved IP: $RESERVED_IP"
+read -r NET_GATEWAY NET_PREFIX <<< "$(udm_network_gateway_prefix "$UDM_NETWORK_ID")"
+[ -n "$NET_GATEWAY" ] && [ -n "$NET_PREFIX" ] || die "Could not read the gateway/prefix for UDM network $UDM_NETWORK_ID"
 
 # ---------------------------------------------------------------------------
 # SSH key
@@ -196,7 +209,8 @@ Template:             ${PVE_TEMPLATE_STORAGE}:vztmpl/${PVE_TEMPLATE}
 CPU:                  ${CORES} vCPU
 RAM:                  ${MEMORY} MB
 Disk:                 ${DISK} GB (storage: $PVE_STORAGE)
-Network:              bridge=$PVE_BRIDGE, vlan=${VLAN_TAG:-none (native/VLAN1)}, DHCP reservation via UDM Pro -> $RESERVED_IP
+Network:              bridge=$PVE_BRIDGE, vlan=${VLAN_TAG:-none (native/VLAN1)}, static $RESERVED_IP/$NET_PREFIX gw $NET_GATEWAY (also reserved on the UDM)
+DNS server:           $NET_GATEWAY (UDM — resolves internal split-horizon names)
 Internal DNS:          $FQDN -> $RESERVED_IP (local DNS record, created on the UDM before the container so it resolves from first boot)
 MAC Address:          $MAC_ADDR
 Type:                 Unprivileged LXC, start at boot
@@ -206,6 +220,7 @@ Timezone:             $TIMEZONE
 Public access:         $( [ "${#PUBLIC_HOSTNAMES[@]}" -gt 0 ] && echo "Cloudflare Tunnel -> ${PUBLIC_HOSTNAMES[*]}" || echo "None (internal only)" )
 Internal HTTPS:         $( $ENABLE_TLS && echo "Let's Encrypt via DNS-01 for $FQDN" || echo "Disabled" )
 Beszel Monitoring:      $( $SKIP_BESZEL && echo "Skipped" || echo "Enabled -> $BESZEL_HUB_URL" )
+Tailscale:              $( $SKIP_TAILSCALE && echo "Not joined (default — pass --enable-tailscale to join)" || echo "Enabled — joins tailnet tagged '$TAILSCALE_TAG', Tailscale SSH on" )
 ============================================================
 
 PLAN
@@ -221,8 +236,8 @@ if ! $ASSUME_YES; then
 fi
 
 # ---------------------------------------------------------------------------
-# UDM Pro reservation + DNS record — created first, so the container gets
-# the right IP and resolves correctly from its very first DHCP request.
+# UDM Pro reservation + DNS record — created first, so the name resolves
+# from first boot and the IP is marked as taken on the UDM.
 # ---------------------------------------------------------------------------
 log "Creating UDM Pro DHCP reservation + local DNS record: $FQDN -> $RESERVED_IP..."
 UDM_OBJECT_ID="$(create_dhcp_reservation_and_dns "$MAC_ADDR" "$RESERVED_IP" "$FQDN" "$UDM_NETWORK_ID")"
@@ -233,7 +248,12 @@ log "UDM reservation created (id: $UDM_OBJECT_ID)"
 # Create + start
 # ---------------------------------------------------------------------------
 log "Creating LXC $VMID ($HOSTNAME_ARG) on $TARGET_NODE..."
-NET0="name=eth0,bridge=${PVE_BRIDGE},ip=dhcp,hwaddr=${MAC_ADDR},type=veth"
+# Static, not DHCP: the UDM doesn't always apply a brand-new reservation to
+# the container's first DHCP request, and the old fix (reboot via the API to
+# force a new lease) left the container's network dead and its config lock
+# stuck (host006, 2026-09-24). The reservation range sits outside the DHCP
+# pool, so a static address there can't collide.
+NET0="name=eth0,bridge=${PVE_BRIDGE},ip=${RESERVED_IP}/${NET_PREFIX},gw=${NET_GATEWAY},hwaddr=${MAC_ADDR},type=veth"
 [ -n "$VLAN_TAG" ] && NET0="${NET0},tag=${VLAN_TAG}"
 
 TASK_ID="$(pve_api POST "/nodes/$TARGET_NODE/lxc" \
@@ -244,6 +264,8 @@ TASK_ID="$(pve_api POST "/nodes/$TARGET_NODE/lxc" \
   "memory=${MEMORY}" \
   "rootfs=${PVE_STORAGE}:${DISK}" \
   "net0=${NET0}" \
+  "nameserver=${NET_GATEWAY}" \
+  "searchdomain=${INTERNAL_DOMAIN}" \
   "unprivileged=1" \
   "onboot=1" \
   "start=1" \
@@ -280,42 +302,17 @@ done
 log "Container running."
 
 # ---------------------------------------------------------------------------
-# Wait for a DHCP-assigned IP, discovered via Proxmox's own interface report
+# Wait for the (static) address to come up
 # ---------------------------------------------------------------------------
-log "Waiting for a DHCP lease..."
-CONTAINER_IP=""
-for i in $(seq 1 20); do
-  CONTAINER_IP="$(pve_api GET "/nodes/$TARGET_NODE/lxc/$VMID/interfaces" 2>/dev/null | jq -r '.data[] | select(.name=="eth0") | .inet // empty' | cut -d/ -f1)"
-  [ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ] && break
+CONTAINER_IP="$RESERVED_IP"
+log "Waiting for $CONTAINER_IP to answer..."
+NET_UP=false
+for i in $(seq 1 24); do
+  ping -c1 -W2 "$CONTAINER_IP" >/dev/null 2>&1 && { NET_UP=true; break; }
   sleep 5
 done
-[ -n "$CONTAINER_IP" ] && [ "$CONTAINER_IP" != "null" ] || die "Container did not get a DHCP address in time. VMID=$VMID node=$TARGET_NODE — check the UDM Pro's DHCP scope for VLAN $VLAN_TAG."
+$NET_UP || die "Container isn't answering on $CONTAINER_IP after 2 minutes. VMID=$VMID node=$TARGET_NODE — check its network in the Proxmox console."
 log "Container IP: $CONTAINER_IP"
-
-# The UDM's reservation doesn't always take effect on the container's very
-# first DHCP request — confirmed via testing: the container got a pool IP
-# initially, and only picked up the reserved IP after a lease renewal
-# several minutes later (mid-bootstrap, breaking a script that assumed the
-# first IP was final). Rather than race that, force a fresh DHCP request via
-# reboot once, and re-check — much more reliable than hoping a later
-# passive renewal happens before we need the IP to be stable.
-if [ "$CONTAINER_IP" != "$RESERVED_IP" ]; then
-  warn "Container got $CONTAINER_IP but the UDM reservation was for $RESERVED_IP — reservation may not have propagated to the DHCP server yet. Rebooting to force a fresh DHCP request..."
-  sleep 20
-  pve_api POST "/nodes/$TARGET_NODE/lxc/$VMID/status/reboot" >/dev/null || warn "Reboot request failed — continuing with $CONTAINER_IP"
-  sleep 15
-  for i in $(seq 1 20); do
-    NEW_IP="$(pve_api GET "/nodes/$TARGET_NODE/lxc/$VMID/interfaces" 2>/dev/null | jq -r '.data[] | select(.name=="eth0") | .inet // empty' | cut -d/ -f1)"
-    [ -n "$NEW_IP" ] && [ "$NEW_IP" != "null" ] && [ "$NEW_IP" = "$RESERVED_IP" ] && { CONTAINER_IP="$NEW_IP"; break; }
-    sleep 5
-  done
-  if [ "$CONTAINER_IP" = "$RESERVED_IP" ]; then
-    log "Reservation now confirmed: $CONTAINER_IP"
-  else
-    warn "Still not on the reserved IP after a reboot (currently ${NEW_IP:-unknown}) — continuing with whatever's currently assigned, but this container's IP may not be stable yet. Investigate the UDM reservation manually if this persists."
-    [ -n "$NEW_IP" ] && [ "$NEW_IP" != "null" ] && CONTAINER_IP="$NEW_IP"
-  fi
-fi
 
 log "Verifying local DNS resolution for $FQDN..."
 DNS_OK=false
@@ -334,14 +331,18 @@ log "SSH confirmed as root."
 
 ssh_opts "$PROVISIONING_SSH_KEY"
 
-log "Running bootstrap-container.sh remotely..."
-scp "${SSH_OPTS[@]}" "$HERE/scripts/bootstrap-container.sh" "root@$CONTAINER_IP:/tmp/bootstrap-container.sh"
-BOOTSTRAP_OUT="$(ssh "${SSH_OPTS[@]}" "root@$CONTAINER_IP" "chmod +x /tmp/bootstrap-container.sh && /tmp/bootstrap-container.sh '$FQDN' '$TIMEZONE' '$ADMIN_USER' '$SSH_PUBLIC_KEY' && rm -f /tmp/bootstrap-container.sh")"
+log "Running the container_bootstrap Ansible role..."
+BOOTSTRAP_VARS="$(jq -n --arg fqdn "$FQDN" --arg tz "$TIMEZONE" --arg user "$ADMIN_USER" --arg key "$SSH_PUBLIC_KEY" \
+  '{container_bootstrap_fqdn:$fqdn, container_bootstrap_timezone:$tz, container_bootstrap_admin_user:$user, container_bootstrap_ssh_public_key:$key}')"
+ansible_run_playbook_root "playbooks/provisioning/container_bootstrap.yml" "$CONTAINER_IP" "$PROVISIONING_SSH_KEY" "$BOOTSTRAP_VARS" \
+  || die "container_bootstrap Ansible role failed"
 log "Bootstrap complete."
 
 log "Verifying SSH as $ADMIN_USER@$CONTAINER_IP..."
 wait_for_ssh "$PROVISIONING_SSH_KEY" "$ADMIN_USER" "$CONTAINER_IP" 6 5 || die "SSH as $ADMIN_USER failed after bootstrap"
 log "$ADMIN_USER SSH confirmed."
+
+UBUNTU_VERSION="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" 'lsb_release -rs')"
 
 # ---------------------------------------------------------------------------
 # Beszel monitoring agent (default on) — connects outbound to the existing
@@ -351,16 +352,42 @@ log "$ADMIN_USER SSH confirmed."
 # ---------------------------------------------------------------------------
 BESZEL_OK=false
 if ! $SKIP_BESZEL; then
-  log "Installing Beszel monitoring agent..."
+  log "Installing Beszel monitoring agent via Ansible..."
   load_beszel_creds
-  scp "${SSH_OPTS[@]}" "$PROVISIONING_ROOT/common/install-beszel-agent.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-beszel-agent.sh"
-  if printf '%s' "$BESZEL_TOKEN" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-beszel-agent.sh && /tmp/install-beszel-agent.sh '$BESZEL_HUB_URL' '$BESZEL_HUB_KEY' '$BESZEL_PORT' && rm -f /tmp/install-beszel-agent.sh" 2>&1; then
+  BESZEL_VARS="$(jq -n --arg url "$BESZEL_HUB_URL" --arg key "$BESZEL_HUB_KEY" --argjson port "$BESZEL_PORT" --arg token "$BESZEL_TOKEN" \
+    '{beszel_agent_hub_url:$url, beszel_agent_hub_key:$key, beszel_agent_port:$port, beszel_agent_token:$token}')"
+  if ansible_run_playbook "playbooks/provisioning/beszel_agent.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$BESZEL_VARS"; then
     BESZEL_OK=true
     log "Beszel agent connected."
   else
     warn "Beszel agent install/connection failed — check the output above. Not fatal to the rest of provisioning."
   fi
+  unset BESZEL_VARS
+fi
+
+# ---------------------------------------------------------------------------
+# Tailscale (default on) — independent of the tunnel/TLS/web steps below, so
+# it runs early alongside Beszel. Each container gets its own freshly-minted,
+# reusable, non-ephemeral authkey rather than sharing one across containers.
+# ---------------------------------------------------------------------------
+TAILSCALE_OK=false TS_HOSTNAME="" TS_KEY_ID_USED=""
+if ! $SKIP_TAILSCALE; then
+  log "Minting a tagged Tailscale authkey ($TAILSCALE_TAG) for $HOSTNAME_ARG..."
+  load_tailscale_creds
+  tailscale_mint_authkey "proxmox-$HOSTNAME_ARG"
+  TS_KEY_ID_USED="$TS_KEY_ID"
+  TS_HOSTNAME="$HOSTNAME_ARG"
+  log "Installing Tailscale and joining the tailnet as '$TS_HOSTNAME' via Ansible..."
+  TAILSCALE_VARS="$(jq -n --arg host "$TS_HOSTNAME" --arg key "$TS_AUTH_KEY" '{tailscale_join_hostname:$host, tailscale_join_authkey:$key}')"
+  unset TS_AUTH_KEY
+  if ansible_run_playbook "playbooks/provisioning/tailscale_join.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$TAILSCALE_VARS"; then
+    TAILSCALE_OK=true
+    log "Tailscale joined."
+  else
+    warn "Tailscale install/join failed — continuing with the rest of provisioning. Revoking the unused authkey ($TS_KEY_ID_USED)."
+    tailscale_revoke_key "$TS_KEY_ID_USED"
+  fi
+  unset TAILSCALE_VARS
 fi
 
 # ---------------------------------------------------------------------------
@@ -373,7 +400,7 @@ fi
 TUNNEL_RECORD_ID="" DEDICATED_TUNNEL_ID="" TUNNEL_ZONE_ID="" TUNNEL_ACCOUNT_ID="" LOCAL_OVERRIDE_ID=""
 if [ -n "$PUBLIC_HOSTNAME" ]; then
   log "Provisioning dedicated Cloudflare Tunnel for $PUBLIC_HOSTNAME -> $CONTAINER_IP ..."
-  TUNNEL_OUT="$("$HERE/scripts/install-cloudflare-tunnel.sh" "$HOSTNAME_ARG" "$PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
+  TUNNEL_OUT="$("$PROVISIONING_ROOT/common/install-cloudflare-tunnel.sh" "$HOSTNAME_ARG" "$PUBLIC_HOSTNAME" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY")" || die "Cloudflare Tunnel provisioning failed"
   DEDICATED_TUNNEL_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ID=' | cut -d= -f2)"
   TUNNEL_RECORD_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_RECORD_ID=' | cut -d= -f2)"
   TUNNEL_ZONE_ID="$(echo "$TUNNEL_OUT" | grep '^CLOUDFLARE_TUNNEL_ZONE_ID=' | cut -d= -f2)"
@@ -405,15 +432,17 @@ if $ENABLE_TLS; then
   # too, not just Cloudflare's edge cert.
   TLS_DOMAIN_DESC="$FQDN"
   [ -n "$PUBLIC_HOSTNAME" ] && TLS_DOMAIN_DESC="$FQDN + $PUBLIC_HOSTNAME"
-  log "Requesting Let's Encrypt certificate for $TLS_DOMAIN_DESC via DNS-01..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-https-dns01.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-https-dns01.sh"
-  if printf '%s' "$CF_API_TOKEN" | ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-https-dns01.sh && /tmp/install-https-dns01.sh '$FQDN' '$LETSENCRYPT_EMAIL' ${PUBLIC_HOSTNAME:+'$PUBLIC_HOSTNAME'} && rm -f /tmp/install-https-dns01.sh" 2>&1; then
+  log "Requesting Let's Encrypt certificate for $TLS_DOMAIN_DESC via DNS-01 (Ansible)..."
+  CERTBOT_VARS="$(jq -n --arg fqdn "$FQDN" --arg email "$LETSENCRYPT_EMAIL" --arg token "$CF_API_TOKEN" \
+    --argjson additional "$( [ -n "$PUBLIC_HOSTNAME" ] && jq -n --arg h "$PUBLIC_HOSTNAME" '[$h]' || echo '[]' )" \
+    '{certbot_dns01_fqdn:$fqdn, certbot_dns01_email:$email, certbot_dns01_additional_domains:$additional, certbot_dns01_cf_token:$token}')"
+  if ansible_run_playbook "playbooks/provisioning/certbot_dns01.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CERTBOT_VARS"; then
     TLS_OK=true
     log "Certificate issued for $TLS_DOMAIN_DESC."
   else
     warn "Let's Encrypt DNS-01 issuance failed — check the output above. Not fatal to the rest of provisioning."
   fi
+  unset CERTBOT_VARS
 fi
 
 # ---------------------------------------------------------------------------
@@ -424,21 +453,34 @@ fi
 # ---------------------------------------------------------------------------
 WEB_OK=false
 if ! $SKIP_WEB; then
-  log "Installing minimal test vhost..."
-  scp "${SSH_OPTS[@]}" "$HERE/scripts/install-test-vhost.sh" "$ADMIN_USER@$CONTAINER_IP:/tmp/install-test-vhost.sh"
-  if ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$CONTAINER_IP" \
-      "chmod +x /tmp/install-test-vhost.sh && /tmp/install-test-vhost.sh '$FQDN' ${PUBLIC_HOSTNAME:+'$PUBLIC_HOSTNAME'} && rm -f /tmp/install-test-vhost.sh"; then
+  log "Installing minimal test vhost (internal FQDN) via Ansible..."
+  CERT_DIR="/etc/letsencrypt/live/${FQDN}"
+  INTERNAL_VHOST_VARS="$(jq -n --arg host "$FQDN" --argjson ssl "$TLS_OK" --arg cert_dir "$CERT_DIR" \
+    '{site_vhost_hostname:$host, site_vhost_style:"sites_available", site_vhost_is_internal:true, site_vhost_ssl:$ssl, site_vhost_cert_dir:$cert_dir,
+      site_vhost_welcome_subtitle:"Provisioned via the Proxmox LXC provisioning toolkit (internal FQDN)."}')"
+  if ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$INTERNAL_VHOST_VARS"; then
     WEB_OK=true
-    log "Test vhost active."
+    log "Internal test vhost active."
   else
-    warn "Test vhost install failed — check the output above. Not fatal to the rest of provisioning."
+    warn "Internal test vhost install failed — check the output above. Not fatal to the rest of provisioning."
+  fi
+  unset INTERNAL_VHOST_VARS
+
+  if [ -n "$PUBLIC_HOSTNAME" ]; then
+    log "Installing vhost for public hostname $PUBLIC_HOSTNAME via Ansible..."
+    PUBLIC_VHOST_VARS="$(jq -n --arg host "$PUBLIC_HOSTNAME" --argjson ssl "$TLS_OK" --arg cert_dir "$CERT_DIR" \
+      '{site_vhost_hostname:$host, site_vhost_style:"sites_available", site_vhost_is_internal:false, site_vhost_ssl:$ssl, site_vhost_cert_dir:$cert_dir,
+        site_vhost_welcome_subtitle:"Provisioned via the Proxmox LXC provisioning toolkit (public hostname — reached via Cloudflare Tunnel externally, or the local DNS override internally)."}')"
+    if ! ansible_run_playbook "playbooks/provisioning/site_vhost.yml" "$CONTAINER_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$PUBLIC_VHOST_VARS"; then
+      warn "Public hostname vhost install failed — check the output above. Not fatal to the rest of provisioning."
+    fi
+    unset PUBLIC_VHOST_VARS
   fi
 fi
 
 # ---------------------------------------------------------------------------
 # Final state + provisioning record
 # ---------------------------------------------------------------------------
-UBUNTU_VERSION="$(echo "$BOOTSTRAP_OUT" | grep '^UBUNTU_VERSION=' | cut -d= -f2)"
 FINAL_NOW="$(date -Iseconds)"
 state_write "$HOSTNAME_ARG" "$(jq -n \
   --arg name "$HOSTNAME_ARG" --arg fqdn "$FQDN" --argjson vmid "$VMID" --arg node "$TARGET_NODE" \
@@ -451,13 +493,15 @@ state_write "$HOSTNAME_ARG" "$(jq -n \
   --arg local_override_id "$LOCAL_OVERRIDE_ID" \
   --argjson tls_enabled "$TLS_OK" --argjson web_enabled "$WEB_OK" --argjson beszel_enabled "$BESZEL_OK" \
   --argjson dns_ok "$DNS_OK" --arg udm_object_id "$UDM_OBJECT_ID" --arg reserved_ip "$RESERVED_IP" \
+  --argjson tailscale_enabled "$TAILSCALE_OK" --arg tailscale_hostname "$TS_HOSTNAME" --arg tailscale_tag "$TAILSCALE_TAG" --arg tailscale_key_id "$TS_KEY_ID_USED" \
   '{name:$name, fqdn:$fqdn, vmid:$vmid, node:$node, mac_address:$mac, public_ipv4:$ip,
     created_at:$created, updated_at:$updated, status:$status, cores:$cores, memory_mb:$memory, disk_gb:$disk,
     ubuntu_version:$ubuntu, tls_enabled:$tls_enabled, web_enabled:$web_enabled, beszel_enabled:$beszel_enabled,
     internal_dns:{configured:true, verified:$dns_ok, udm_object_id:$udm_object_id, reserved_ip:$reserved_ip},
     cloudflare:{tunnel_enabled:$tunnel_enabled, public_hostname:$public_hostname, tunnel_id:$tunnel_id,
                 tunnel_dns_record_id:$tunnel_record_id, tunnel_zone_id:$tunnel_zone_id, account_id:$tunnel_account_id,
-                local_dns_override_id:$local_override_id}}')"
+                local_dns_override_id:$local_override_id},
+    tailscale:{enabled:$tailscale_enabled, hostname:$tailscale_hostname, tag:$tailscale_tag, authkey_id:$tailscale_key_id}}')"
 
 RECORD="$(record_file "$HOSTNAME_ARG")"
 {
@@ -484,6 +528,7 @@ RECORD="$(record_file "$HOSTNAME_ARG")"
   echo "Internal HTTPS (DNS-01):"; echo "$( $TLS_OK && echo "Enabled — https://$FQDN/" || echo 'Not configured' )"; echo
   echo "Test Web Server:"; echo "$( $WEB_OK && echo "Enabled — Apache welcome page" || echo 'Not configured' )"; echo
   echo "Beszel Monitoring:"; echo "$( $BESZEL_OK && echo "Enabled — $BESZEL_HUB_URL" || echo 'Not configured' )"; echo
+  echo "Tailscale:"; echo "$( $TAILSCALE_OK && echo "Joined — hostname '$TS_HOSTNAME', tag $TAILSCALE_TAG, Tailscale SSH on" || echo 'Not joined' )"; echo
   echo "SSH User:"; echo "$ADMIN_USER"; echo
   echo "SSH Command:"; echo "ssh -i $PROVISIONING_SSH_KEY $ADMIN_USER@$FQDN"; echo
   echo "Service:"; echo "None yet — base OS only"; echo
@@ -493,21 +538,20 @@ chmod 600 "$RECORD"
 
 # ---------------------------------------------------------------------------
 # Any additional public hostnames beyond the primary (from a comma-separated
-# --public-hostname) are attached now, via the exact same path add-vhost.sh
-# uses for an already-existing container — the primary tunnel/CNAME/DNS
-# override/state/record are already fully written above, so from here on
-# this container looks no different to add-vhost.sh than one that's been
-# running for a while. A failure here warns but doesn't undo the successful
-# primary provisioning that already happened.
+# --public-hostname) are attached now as vhosts, via the same Ansible
+# playbook used for an already-existing container — state is already
+# written as Completed above, so the container is in the provisioned
+# inventory. A failure here warns but doesn't undo the successful primary
+# provisioning that already happened.
 # ---------------------------------------------------------------------------
 ADDITIONAL_OK=0 ADDITIONAL_FAILED=0
 for extra in "${ADDITIONAL_PUBLIC_HOSTNAMES[@]}"; do
   log "Adding additional public hostname $extra ..."
-  if "$HERE/bin/add-vhost.sh" "$HOSTNAME_ARG" "$extra" --yes; then
+  if ansible_vhost_add "$HOSTNAME_ARG" "$extra"; then
     ADDITIONAL_OK=$((ADDITIONAL_OK + 1))
   else
     ADDITIONAL_FAILED=$((ADDITIONAL_FAILED + 1))
-    warn "Failed to add $extra — the container and its primary hostname are still fine. Retry with: ./bin/add-vhost.sh $HOSTNAME_ARG $extra"
+    warn "Failed to add $extra — the container and its primary hostname are still fine. Retry with: ansible-playbook -i provisioning/inventory playbooks/provisioning/vhost_add.yml -l $HOSTNAME_ARG -e vhost=$extra"
   fi
 done
 
@@ -532,6 +576,9 @@ Internal HTTPS:
 
 Beszel Monitoring:
   $( $BESZEL_OK && echo "Connected to $BESZEL_HUB_URL" || echo "Not configured" )
+
+Tailscale:
+  $( $TAILSCALE_OK && echo "Joined ($TS_HOSTNAME, $TAILSCALE_TAG)" || echo "Not joined" )
 
 Public:
 $( [ -n "$PUBLIC_HOSTNAME" ] && echo "  $PUBLIC_HOSTNAME (primary)

@@ -1,0 +1,172 @@
+---
+# Installs standalone MySQL 8.x (matching the reference server, not
+# MariaDB — do not confuse with the orphaned local `mariadb` role, which
+# installs a different package), bound for external reachability but
+# firewall-restricted via ufw to only the given client IP(s). Ported from
+# provisioning/binarylane/scripts/install-mysql-standalone.sh.
+#
+# Credential-preserve-on-rerun is the highest-risk part of this port: the
+# original script reads /etc/mysql-provisioning-credentials.env back if it
+# already exists (silently overriding any db_name/db_user passed this run)
+# rather than regenerating — a naive "always generate" port would rotate
+# the root/app passwords on every playbook run and break every already-
+# configured app connection. This role replicates that exact behavior,
+# quirk included.
+
+- name: Normalize the allowed-IPs list
+  ansible.builtin.set_fact:
+    mysql_standalone_ip_list: >-
+      {{ mysql_standalone_allowed_ips if mysql_standalone_allowed_ips is iterable and mysql_standalone_allowed_ips is not string
+         else mysql_standalone_allowed_ips.split(',') | map('trim') | list }}
+
+- name: Require at least one allowed IP
+  ansible.builtin.assert:
+    that: mysql_standalone_ip_list | select | list | length > 0
+    fail_msg: mysql_standalone_allowed_ips must contain at least one IP/CIDR.
+
+- name: apt update
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+- name: Install MySQL server
+  ansible.builtin.apt:
+    name: mysql-server
+    state: present
+  become: true
+
+- name: Install PyMySQL
+  # community.mysql.mysql_user/mysql_db run their queries via a Python MySQL
+  # client library on the TARGET host, not the control host — confirmed
+  # directly: without this, "Set the root password" below fails with a
+  # no_log-censored error on a completely bare Ubuntu image (neither
+  # pymysql nor MySQLdb present by default).
+  ansible.builtin.apt:
+    name: python3-pymysql
+    state: present
+  become: true
+
+- name: Bind mysqld to all interfaces
+  # External reachability is actually gated by the ufw rules below, not by
+  # this alone. Only restarts MySQL when this actually changes (a
+  # deliberate improvement over the original script, which unconditionally
+  # restarts on every run — needless downtime for an already-correct,
+  # already-running database).
+  ansible.builtin.lineinfile:
+    path: /etc/mysql/mysql.conf.d/mysqld.cnf
+    regexp: '^bind-address'
+    line: "bind-address\t\t= 0.0.0.0"
+  become: true
+  register: mysql_standalone_bind_address
+  notify: "restart mysql"
+
+- name: Enable and start MySQL
+  ansible.builtin.systemd:
+    name: mysql
+    enabled: true
+    state: started
+  become: true
+
+- name: Flush handlers so a bind-address change takes effect now
+  ansible.builtin.meta: flush_handlers
+
+- name: Check for an existing credentials file
+  ansible.builtin.stat:
+    path: "{{ mysql_standalone_credentials_file }}"
+  become: true
+  register: mysql_standalone_cred_stat
+
+- name: Read back existing credentials
+  when: mysql_standalone_cred_stat.stat.exists
+  become: true
+  no_log: true
+  block:
+    - name: Slurp the credentials file
+      ansible.builtin.slurp:
+        src: "{{ mysql_standalone_credentials_file }}"
+      register: mysql_standalone_cred_raw
+
+    - name: Parse existing credentials
+      ansible.builtin.set_fact:
+        mysql_standalone_root_password: "{{ (mysql_standalone_cred_raw.content | b64decode) | regex_search('MYSQL_ROOT_PASSWORD=(.*)', '\\1') | first }}"
+        mysql_standalone_app_password: "{{ (mysql_standalone_cred_raw.content | b64decode) | regex_search('MYSQL_APP_PASSWORD=(.*)', '\\1') | first }}"
+        mysql_standalone_effective_db_name: "{{ (mysql_standalone_cred_raw.content | b64decode) | regex_search('DB_NAME=(.*)', '\\1') | first }}"
+        mysql_standalone_effective_db_user: "{{ (mysql_standalone_cred_raw.content | b64decode) | regex_search('DB_USER=(.*)', '\\1') | first }}"
+
+- name: Generate new credentials
+  when: not mysql_standalone_cred_stat.stat.exists
+  become: true
+  no_log: true
+  block:
+    - name: Generate the root password
+      ansible.builtin.command: openssl rand -base64 24
+      register: mysql_standalone_new_root_pw
+      changed_when: false
+
+    - name: Generate the app password
+      ansible.builtin.command: openssl rand -base64 24
+      register: mysql_standalone_new_app_pw
+      changed_when: false
+
+    - name: Set the generated credentials as facts
+      ansible.builtin.set_fact:
+        mysql_standalone_root_password: "{{ mysql_standalone_new_root_pw.stdout }}"
+        mysql_standalone_app_password: "{{ mysql_standalone_new_app_pw.stdout }}"
+        mysql_standalone_effective_db_name: "{{ mysql_standalone_db_name }}"
+        mysql_standalone_effective_db_user: "{{ mysql_standalone_db_user }}"
+
+    - name: Set the root password (fresh install still has auth_socket access)
+      community.mysql.mysql_user:
+        name: root
+        host: localhost
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        password: "{{ mysql_standalone_root_password }}"
+        check_implicit_admin: true
+
+    - name: Write the credentials file
+      ansible.builtin.copy:
+        dest: "{{ mysql_standalone_credentials_file }}"
+        content: |
+          MYSQL_ROOT_PASSWORD={{ mysql_standalone_root_password }}
+          MYSQL_APP_PASSWORD={{ mysql_standalone_app_password }}
+          DB_NAME={{ mysql_standalone_effective_db_name }}
+          DB_USER={{ mysql_standalone_effective_db_user }}
+        owner: root
+        group: root
+        mode: '0600'
+
+- name: Create the database if needed
+  community.mysql.mysql_db:
+    name: "{{ mysql_standalone_effective_db_name }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_standalone_root_password }}"
+  become: true
+  no_log: true
+
+- name: Create the app user and grant privileges, per allowed IP
+  community.mysql.mysql_user:
+    name: "{{ mysql_standalone_effective_db_user }}"
+    host: "{{ item }}"
+    password: "{{ mysql_standalone_app_password }}"
+    priv: "{{ mysql_standalone_effective_db_name }}.*:ALL"
+    login_user: root
+    login_password: "{{ mysql_standalone_root_password }}"
+  loop: "{{ mysql_standalone_ip_list | select | list }}"
+  become: true
+  no_log: true
+
+- name: Allow MySQL (3306/tcp) from each allowed IP via ufw
+  community.general.ufw:
+    rule: allow
+    from_ip: "{{ item }}"
+    to_port: '3306'
+    proto: tcp
+    comment: "db-only: app server access"
+  loop: "{{ mysql_standalone_ip_list | select | list }}"
+  become: true
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "DB_NAME={{ mysql_standalone_effective_db_name }} DB_USER={{ mysql_standalone_effective_db_user }}"
