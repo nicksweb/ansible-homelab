@@ -1,0 +1,124 @@
+---
+# Installs CrowdSec (detection) plus the firewall and Apache bouncers
+# (remediation) on a lamp_stack server. Run after lamp_tuning, so Apache
+# already logs real client IPs. See defaults/main.yml for the design.
+
+- name: Add the CrowdSec apt repository
+  ansible.builtin.deb822_repository:
+    name: crowdsec
+    types: deb
+    uris: "{{ crowdsec_repo_uri }}"
+    suites: any
+    components: main
+    signed_by: "{{ crowdsec_repo_key }}"
+  become: true
+  register: crowdsec_repo
+
+- name: Install CrowdSec
+  ansible.builtin.apt:
+    name: crowdsec
+    state: present
+    update_cache: "{{ crowdsec_repo.changed }}"
+  become: true
+
+- name: Install hub collections
+  ansible.builtin.command: "cscli collections install {{ crowdsec_collections | join(' ') }}"
+  become: true
+  register: crowdsec_collections_install
+  changed_when: "'Enabled' in crowdsec_collections_install.stdout ~ crowdsec_collections_install.stderr"
+  notify: "reload crowdsec"
+
+# CrowdSec >= 1.8 runs `cscli setup` at install: it detects Apache, sshd,
+# syslog and MySQL and writes acquis.d/setup.<service>.yaml for each. Rely on
+# that, and only add our own Apache source when detection didn't (e.g. Apache
+# installed after CrowdSec). Never both: the same log read twice doubles
+# every event and halves the thresholds in effect.
+- name: Check for the generated Apache log source
+  ansible.builtin.stat:
+    path: /etc/crowdsec/acquis.d/setup.apache2.yaml
+  register: crowdsec_setup_apache
+  become: true
+
+- name: Read Apache logs (only when setup didn't)
+  ansible.builtin.copy:
+    dest: /etc/crowdsec/acquis.d/apache2.yaml
+    content: |
+      # Managed by Ansible (provisioning/crowdsec).
+      filenames:
+        - /var/log/apache2/*.log
+      labels:
+        type: apache2
+      source: file
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: not crowdsec_setup_apache.stat.exists
+  notify: "reload crowdsec"
+
+- name: Remove our Apache log source when setup generated one
+  ansible.builtin.file:
+    path: /etc/crowdsec/acquis.d/apache2.yaml
+    state: absent
+  become: true
+  when: crowdsec_setup_apache.stat.exists
+  notify: "reload crowdsec"
+
+- name: Build the whitelist
+  ansible.builtin.set_fact:
+    crowdsec_whitelist: >-
+      {{ (crowdsec_always_trusted + crowdsec_trusted_ips
+          + ([crowdsec_management_ip] if crowdsec_management_ip | length > 0 else []))
+         | select | unique | list }}
+
+- name: Whitelist trusted addresses
+  ansible.builtin.template:
+    src: trusted-ips.yaml.j2
+    dest: /etc/crowdsec/parsers/s02-enrich/zz-trusted-ips.yaml
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: "reload crowdsec"
+
+- name: Install the firewall bouncer
+  ansible.builtin.apt:
+    name: crowdsec-firewall-bouncer-iptables
+    state: present
+  become: true
+  when: crowdsec_firewall_bouncer
+
+- name: Apache-level bans (custom bouncer + RewriteMap)
+  ansible.builtin.include_tasks: apache_bouncer.yml
+  when: crowdsec_apache_bouncer
+
+- name: Enrol in the CrowdSec console
+  ansible.builtin.command: "cscli console enroll --name {{ crowdsec_enroll_name }} {{ crowdsec_enroll_key }}"
+  become: true
+  when: crowdsec_enroll_key | length > 0
+  register: crowdsec_enroll
+  changed_when: "'already enrolled' not in (crowdsec_enroll.stdout ~ crowdsec_enroll.stderr)"
+  no_log: true
+
+- name: Apply changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure CrowdSec is running
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ ['crowdsec'] + (['crowdsec-firewall-bouncer'] if crowdsec_firewall_bouncer else []) }}"
+  become: true
+
+- name: Check the bouncers have checked in
+  ansible.builtin.command: cscli bouncers list -o json
+  become: true
+  register: crowdsec_bouncers
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      CrowdSec running; bouncers: {{ (crowdsec_bouncers.stdout | from_json | default([], true)) | map(attribute='name') | join(', ') or 'none' }};
+      whitelisted: {{ crowdsec_whitelist | join(', ') }}.

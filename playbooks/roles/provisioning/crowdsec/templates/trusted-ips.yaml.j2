@@ -1,0 +1,9 @@
+# Managed by Ansible (provisioning/crowdsec). Never raise alerts for these.
+name: local/trusted-ips
+description: "Office, management and tailnet addresses"
+whitelist:
+  reason: "trusted admin/office/tailnet source"
+  cidr:
+{% for cidr in crowdsec_whitelist %}
+    - "{{ cidr if '/' in cidr else (cidr ~ ('/128' if ':' in cidr else '/32')) }}"
+{% endfor %}

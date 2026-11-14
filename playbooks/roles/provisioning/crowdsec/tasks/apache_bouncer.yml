@@ -1,0 +1,135 @@
+---
+# Apache-level blocking for visitors that arrive through the Cloudflare tunnel
+# (they reach Apache from cloudflared on localhost, so the firewall bouncer
+# can't see them). CrowdSec's official custom bouncer feeds this server's own
+# decisions into a RewriteMap; Apache answers banned clients with 403.
+# Local decisions only (origins below): the community blocklist is tens of
+# thousands of IPs, which an exact-match text map is the wrong tool for.
+
+- name: Install the custom bouncer
+  ansible.builtin.apt:
+    name: crowdsec-custom-bouncer
+    state: present
+  become: true
+
+- name: Create the ban map directory
+  ansible.builtin.file:
+    path: "{{ crowdsec_apache_map | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Ensure the ban map exists
+  ansible.builtin.copy:
+    dest: "{{ crowdsec_apache_map }}"
+    content: ""
+    force: false
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Install the ban script
+  ansible.builtin.template:
+    src: crowdsec-apache-ban.sh.j2
+    dest: /usr/local/sbin/crowdsec-apache-ban
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+  notify: "restart custom bouncer"
+
+- name: Point the custom bouncer at the ban script, local decisions only
+  ansible.builtin.lineinfile:
+    path: /etc/crowdsec/bouncers/crowdsec-custom-bouncer.yaml
+    regexp: "^{{ item.key }}:"
+    line: "{{ item.key }}: {{ item.value }}"
+  loop:
+    - { key: bin_path, value: /usr/local/sbin/crowdsec-apache-ban }
+    - { key: feed_via_stdin, value: "false" }
+    - { key: origins, value: "{{ crowdsec_apache_origins | to_json }}" }
+  become: true
+  notify: "restart custom bouncer"
+
+- name: Create the bouncer's systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/crowdsec-custom-bouncer.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Clear the ban map whenever the bouncer starts
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/crowdsec-custom-bouncer.service.d/10-apache-map.conf
+    content: |
+      # Managed by Ansible (provisioning/crowdsec). The bouncer re-sends every
+      # active decision on start, so begin from an empty map.
+      [Service]
+      ExecStartPre=/bin/sh -c ': > {{ crowdsec_apache_map }}'
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  register: crowdsec_custom_dropin
+  notify: "restart custom bouncer"
+
+- name: Reload systemd for the drop-in
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: crowdsec_custom_dropin.changed
+
+- name: Create the shared per-vhost snippet directory
+  # Every vhost template includes /etc/apache2/vhost-common.d/*.conf: Apache
+  # doesn't inherit rewrite rules into vhosts (not even with InheritDown,
+  # which leaves the engine off in vhosts that don't enable it themselves).
+  ansible.builtin.file:
+    path: /etc/apache2/vhost-common.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Write the per-vhost ban rule
+  ansible.builtin.template:
+    src: crowdsec-ban.conf.j2
+    dest: /etc/apache2/vhost-common.d/crowdsec-ban.conf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: "reload apache"
+
+- name: Remove the earlier server-wide ban rule
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apache2/conf-enabled/crowdsec-ban.conf
+    - /etc/apache2/conf-available/crowdsec-ban.conf
+  become: true
+  notify: "reload apache"
+
+- name: Enable mod_rewrite
+  ansible.builtin.command: a2enmod rewrite
+  args:
+    creates: /etc/apache2/mods-enabled/rewrite.load
+  become: true
+  notify: "reload apache"
+
+- name: Validate the Apache config
+  ansible.builtin.command: apache2ctl configtest
+  become: true
+  changed_when: false
+
+- name: Enable the custom bouncer
+  ansible.builtin.systemd:
+    name: crowdsec-custom-bouncer
+    enabled: true
+    state: started
+  become: true

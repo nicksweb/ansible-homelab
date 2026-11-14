@@ -1,0 +1,12 @@
+# Managed by Ansible (provisioning/lamp_tuning). Real visitor IPs behind
+# Cloudflare: logs, CrowdSec and PHP ($_SERVER['REMOTE_ADDR']) all see the
+# client, not cloudflared. The header is only honoured from these sources.
+RemoteIPHeader CF-Connecting-IP
+RemoteIPInternalProxy 127.0.0.1 ::1
+{% for cidr in lamp_tuning_cloudflare_ranges %}
+RemoteIPTrustedProxy {{ cidr }}
+{% endfor %}
+
+# %a (not %h) is the address mod_remoteip rewrites. Same field layout as the
+# stock "combined" format, so CrowdSec's apache2 parser reads it unchanged.
+LogFormat "%a %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined

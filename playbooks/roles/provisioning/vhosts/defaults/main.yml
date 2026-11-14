@@ -13,6 +13,10 @@
 #       udm: false                       # public only — no LAN shortcut on the UDM
 #     - hostname: moved.example.com
 #       takeover: true                   # repoint a CNAME that currently targets another tunnel
+#     - hostname: preview.example.com
+#       noindex: true                    # LAMP only: X-Robots-Tag noindex (pre-prod copies)
+#     - hostname: money.example.com
+#       access: trusted                  # LAMP only: office/management IPs + tailnet only
 #     - hostname: old.example.com
 #       state: absent                    # remove its DNS, routing and config (content kept)
 #
@@ -32,3 +36,12 @@ vhosts_default_service: "http://web:80"
 
 vhosts_cf_api: https://api.cloudflare.com/client/v4
 vhosts_udm_site: default
+
+# `access: trusted` vhosts: always allowed on top of the server's
+# prov_trusted_ips (config TRUSTED_443_IPS). Loopback covers local checks;
+# tunnel visitors are matched on their real IP (mod_remoteip).
+vhosts_trusted_always:
+  - 127.0.0.1
+  - ::1
+  - 100.64.0.0/10
+  - fd7a:115c:a1e0::/48

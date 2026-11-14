@@ -1,0 +1,9 @@
+# Managed by Ansible (provisioning/lamp_tuning). Sized for {{ ansible_memtotal_mb }}MB RAM.
+[mysqld]
+performance_schema = {{ 'ON' if lamp_tuning_mysql_performance_schema else 'OFF' }}
+innodb_buffer_pool_size = {{ lamp_tuning_mysql_buffer_pool_mb }}M
+max_connections = {{ lamp_tuning_mysql_max_connections }}
+table_open_cache = 400
+thread_cache_size = 8
+tmp_table_size = 32M
+max_heap_table_size = 32M

@@ -1,0 +1,50 @@
+---
+# CrowdSec on a LAMP server behind a Cloudflare tunnel.
+#
+# Detection reads Apache's access/error logs (real client IPs, thanks to
+# lamp_tuning's mod_remoteip) and sshd via the system auth log.
+#
+# Remediation, two layers:
+# - firewall bouncer (iptables/ipset): blocks attackers that reach the box
+#   directly: SSH, and the direct 443 path LAN clients use via the UDM.
+# - Apache-level bans: blocks visitors coming through the tunnel, which the
+#   firewall can't (tunnel traffic arrives from cloudflared on localhost).
+#   CrowdSec's official custom bouncer writes this server's own decisions
+#   into a RewriteMap; Apache returns 403 to them. (CrowdSec's mod_crowdsec
+#   Apache module was passed over: still 0.1 beta, in a separate repo.)
+# Blocking at Cloudflare's edge, community blocklist included, is a later
+# option (the Worker bouncer); it needs its own Cloudflare token with
+# Workers/KV permissions.
+
+crowdsec_repo_uri: https://packagecloud.io/crowdsec/crowdsec/any
+crowdsec_repo_key: https://packagecloud.io/crowdsec/crowdsec/gpgkey
+
+crowdsec_collections:
+  - crowdsecurity/linux
+  - crowdsecurity/sshd
+  - crowdsecurity/apache2
+  - crowdsecurity/base-http-scenarios
+  - crowdsecurity/http-cve
+  - crowdsecurity/whitelist-good-actors
+
+crowdsec_firewall_bouncer: true
+crowdsec_apache_bouncer: true
+crowdsec_apache_map: /var/lib/crowdsec-apache/banned.map
+# Decision origins Apache enforces: this server's detections and manual
+# `cscli decisions add`. Not CAPI/lists (see above).
+crowdsec_apache_origins: [crowdsec, cscli]
+
+# Never ban these: office/management IPs, the tailnet, loopback. The
+# orchestrator passes the management IP and TRUSTED_443_IPS.
+crowdsec_management_ip: ""
+crowdsec_trusted_ips: []
+crowdsec_always_trusted:
+  - 127.0.0.1/8
+  - ::1/128
+  - 100.64.0.0/10      # tailnet (Tailscale CGNAT range)
+  - fd7a:115c:a1e0::/48  # tailnet IPv6
+
+# Optional: enrol in the CrowdSec console (app.crowdsec.net) to see alerts and
+# get community blocklists. Empty = not enrolled.
+crowdsec_enroll_key: ""
+crowdsec_enroll_name: "{{ inventory_hostname }}"

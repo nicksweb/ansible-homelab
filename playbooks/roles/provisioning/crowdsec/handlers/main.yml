@@ -1,0 +1,28 @@
+---
+- name: Reload crowdsec
+  ansible.builtin.systemd:
+    name: crowdsec
+    state: reloaded
+  become: true
+  listen: "reload crowdsec"
+
+- name: Restart crowdsec firewall bouncer
+  ansible.builtin.systemd:
+    name: crowdsec-firewall-bouncer
+    state: restarted
+  become: true
+  listen: "restart firewall bouncer"
+
+- name: Restart custom bouncer
+  ansible.builtin.systemd:
+    name: crowdsec-custom-bouncer
+    state: restarted
+  become: true
+  listen: "restart custom bouncer"
+
+- name: Reload apache
+  ansible.builtin.systemd:
+    name: apache2
+    state: reloaded
+  become: true
+  listen: "reload apache"

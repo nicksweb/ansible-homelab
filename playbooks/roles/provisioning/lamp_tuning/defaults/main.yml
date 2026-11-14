@@ -1,0 +1,47 @@
+---
+# Performance tuning for a LAMP server that serves mostly static Jekyll output
+# plus a few PHP apps, sized from the server's own RAM so the same role fits a
+# 2GB pre-prod box and a larger prod box. Runs after lamp_stack.
+
+# Swap: created only when the server has none. Small cloud plans ship without
+# swap, and MySQL + PHP-FPM on 2GB will otherwise hit the OOM killer under a
+# burst instead of slowing down.
+lamp_tuning_swap_mb: 2048
+lamp_tuning_swappiness: 10
+
+# Real visitor IPs. Behind the Cloudflare tunnel every request reaches Apache
+# from cloudflared on localhost; CF-Connecting-IP carries the real client. Only
+# trusted when the request comes from cloudflared (loopback) or a Cloudflare
+# edge range, so a direct (LAN/allow-listed) client cannot spoof it.
+lamp_tuning_cloudflare_ip_urls:
+  - https://www.cloudflare.com/ips-v4
+  - https://www.cloudflare.com/ips-v6
+
+# Browser cache lifetimes. HTML stays short so a publish shows up straight
+# away; Cloudflare's edge cache sits in front of this either way.
+lamp_tuning_cache_html: "access plus 0 seconds"
+lamp_tuning_cache_css_js: "access plus 7 days"
+lamp_tuning_cache_media: "access plus 30 days"
+
+# PHP-FPM. ondemand keeps idle memory near zero on a box that is mostly
+# static; children are capped from RAM (RAM minus what MySQL/Apache/OS need,
+# divided by an average PHP worker size).
+lamp_tuning_fpm_pm: ondemand
+lamp_tuning_fpm_worker_mb: 64
+lamp_tuning_fpm_reserved_mb: 1024
+lamp_tuning_fpm_min_children: 4
+lamp_tuning_fpm_max_children_cap: 40
+lamp_tuning_fpm_idle_timeout: 10s
+lamp_tuning_fpm_max_requests: 500
+
+# OPcache.
+lamp_tuning_opcache_memory_mb: 128
+lamp_tuning_opcache_max_files: 20000
+lamp_tuning_opcache_revalidate_freq: 60
+
+# MySQL on a small box: performance_schema alone takes ~400MB on MySQL 8.
+lamp_tuning_mysql: true
+lamp_tuning_mysql_buffer_pool_pct: 20
+lamp_tuning_mysql_buffer_pool_min_mb: 128
+lamp_tuning_mysql_max_connections: 60
+lamp_tuning_mysql_performance_schema: false

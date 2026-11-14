@@ -1,0 +1,7 @@
+---
+- name: Tune the LAMP stack (swap, real IPs, caching, PHP-FPM, MySQL)
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/lamp_tuning

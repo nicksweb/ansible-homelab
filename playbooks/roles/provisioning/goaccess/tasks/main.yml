@@ -1,0 +1,102 @@
+---
+# GoAccess visitor stats — see defaults/main.yml for the design.
+
+- name: Install GoAccess
+  ansible.builtin.apt:
+    name: goaccess
+    state: present
+  become: true
+
+- name: Create the report and database directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ goaccess_webroot }}"
+    - "{{ goaccess_db_dir }}"
+    - /etc/logrotate.d/httpd-prerotate  # run-parts'd by Apache's logrotate, if it exists
+  become: true
+
+- name: Install the report script
+  ansible.builtin.template:
+    src: goaccess-report.sh.j2
+    dest: /usr/local/sbin/goaccess-report
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Run a final report before Apache's logs rotate
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/httpd-prerotate/goaccess
+    content: |
+      #!/bin/sh
+      # Managed by Ansible (provisioning/goaccess): catch the last lines of
+      # each access log before logrotate moves it.
+      /usr/local/sbin/goaccess-report >/dev/null 2>&1 || true
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Install the systemd service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - name: goaccess-report.service
+      content: |
+        # Managed by Ansible (provisioning/goaccess).
+        [Unit]
+        Description=Regenerate GoAccess visitor stats
+
+        [Service]
+        Type=oneshot
+        Nice=10
+        IOSchedulingClass=idle
+        ExecStart=/usr/local/sbin/goaccess-report
+    - name: goaccess-report.timer
+      content: |
+        # Managed by Ansible (provisioning/goaccess).
+        [Unit]
+        Description=Regenerate GoAccess visitor stats every {{ goaccess_interval }}
+
+        [Timer]
+        OnBootSec=2min
+        OnUnitActiveSec={{ goaccess_interval }}
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+  register: goaccess_units
+  become: true
+
+- name: Reload systemd for the units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: goaccess_units.changed
+
+- name: Enable the timer
+  ansible.builtin.systemd:
+    name: goaccess-report.timer
+    enabled: true
+    state: started
+  become: true
+
+- name: Generate the first reports now
+  ansible.builtin.systemd:
+    name: goaccess-report.service
+    state: started
+  become: true
+  changed_when: false
+
+- name: Report
+  ansible.builtin.debug:
+    msg: "GoAccess reports at https://{{ goaccess_hostname }}/ (every {{ goaccess_interval }}; history in {{ goaccess_db_dir }})."

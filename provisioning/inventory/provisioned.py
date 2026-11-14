@@ -90,6 +90,11 @@ def build():
                 "prov_base_routes": base_routes(toolkit, state),
                 "prov_npm": bool((state.get("docker") or {}).get("npm_installed")),
                 "prov_letsencrypt_email": config["LETSENCRYPT_EMAIL"],
+                # Office/management addresses (config TRUSTED_443_IPS): the
+                # allow-list for `access: trusted` vhosts and the stats page.
+                "prov_trusted_ips": [
+                    ip.strip() for ip in config.get("TRUSTED_443_IPS", "").split(",") if ip.strip()
+                ],
                 "prov_state_file": path,
             }
     return inventory

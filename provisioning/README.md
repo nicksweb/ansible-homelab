@@ -87,7 +87,17 @@ inventory and converged by one playbook — for BinaryLane LAMP and
   `-i provisioning/inventory`.
 - **Declared vhosts:** `provisioning/inventory/host_vars/<server>/vhosts.yml`
   (gitignored). Format and options (`service`, `udm`, `takeover`,
-  `state: absent`) in `playbooks/roles/provisioning/vhosts/defaults/main.yml`.
+  `noindex`, `access: trusted`, `state: absent`) in
+  `playbooks/roles/provisioning/vhosts/defaults/main.yml`.
+  - `noindex: true` adds `X-Robots-Tag: noindex`, for pre-prod copies of
+    live sites.
+  - `access: trusted` lets in only the office/management IPs
+    (`TRUSTED_443_IPS`) and the tailnet, matched on the visitor's real IP,
+    so it works through the tunnel. Use it for admin apps and stats pages.
+  - Both are written to `/etc/apache2/vhost-extra.d/<hostname>/`, which
+    every vhost includes.
+    `/etc/apache2/vhost-common.d/` is the equivalent for all sites (CrowdSec
+    bans).
 
 ```bash
 # from the repo root
@@ -111,7 +121,87 @@ does the UDM get a record, so LAN clients go straight to the server:
 
 If the direct path stops working, the next run withdraws the UDM record, so
 LAN clients fall back to Cloudflare instead of breaking. `destroy-*.sh` removes
-every declared vhost's CNAME and UDM records, then archives its host_vars.
+every declared vhost's CNAME and UDM records, then archives its host_vars
+(`--keep-config` keeps them, for a rebuild under the same name).
+
+## Rebuild and publish without AI
+
+A LAMP server's whole contents are declared in three gitignored files under
+`provisioning/inventory/host_vars/<server>/`:
+
+| File | What | Converged by |
+|---|---|---|
+| `vhosts.yml` | every hostname it serves (cert, tunnel route, DNS, options) | `playbooks/provisioning/vhosts.yml` |
+| `apps.yml` | PHP apps (Laravel, osTicket, small tools): files + DB copied from a source tree on the control host, `.env` overrides, crons; `app_files` for single files such as a site's form-handler `.env` | `playbooks/provisioning/php_apps.yml` |
+| `sites.yml` | Jekyll sites: built on the control host, rsynced up | `provisioning/bin/publish-sites.sh` |
+
+The day-to-day commands, run from the repo root:
+
+```bash
+# Blow the server away and build it again exactly as it was, then put
+# everything back: vhosts, apps (data included), sites, stats, smoke test.
+provisioning/binarylane/bin/rebuild-server.sh <server>          # asks first; --yes to skip
+
+# Publish after editing a site (one, several, or all of them)
+provisioning/bin/publish-sites.sh <server> www.example.com
+provisioning/bin/publish-sites.sh <server>
+
+# Check everything is answering
+provisioning/bin/smoke-test.sh <server>
+
+# Re-copy an app's files and data from its source (e.g. before a cutover)
+ansible-playbook -i provisioning/inventory playbooks/provisioning/php_apps.yml -l <server> -e php_app_refresh=true
+```
+
+`rebuild-server.sh` reads the server's region, plan and tunnel hostname from
+its state, runs destroy (`--keep-config`) and then provision, `vhosts.yml`,
+`php_apps.yml`, `publish-sites.sh` and `goaccess.yml`, and finishes with
+`smoke-test.sh`. If a step fails it stops and prints the command that
+resumes from there.
+
+**From a site's own repo.** Each Jekyll repo has `bin/publish-remote`,
+which runs `publish-sites.sh --source <repo>`: it publishes the repo to
+every server whose `sites.yml` lists it, so the repo itself holds no server
+names. To go live on a new server, add the site's real hostname to that
+server's `sites.yml`, point DNS at it, and from then on `bin/publish-remote`
+(or a `publish-local` changed to call it) publishes there.
+
+**Publishing.** Builds go to a temporary directory, never the repo's
+`_site`. The rsync uses `--delete --delay-updates`, so new files land at the
+end and a failed transfer leaves the old site intact. A build without
+`index.html` is refused. The server keeps no backup copies: site history is
+the git repo. `projects/` under a webroot belongs to the PHP apps and is
+never touched by a publish. `preview: true` in `sites.yml` builds a pre-prod
+copy: Jekyll `url` set to the preview hostname, and the preview hostname let
+through `.htaccess` canonical-host redirects.
+
+**Pre-prod safe mode** (`php_app_safe_mode: true` in `apps.yml`):
+
+- app crons aren't installed;
+- each app's `safe_sql` runs after import (e.g. osTicket stops polling
+  mailboxes);
+- `MAIL_MAILER=log` is set wherever there's a `.env`;
+- outbound mail ports (SMTP, IMAP, POP) are denied in ufw as the backstop.
+
+A pre-prod copy holds real data but can't send mail, and can't take mail
+out of a live mailbox.
+
+**Automatic updates** (`playbooks/provisioning/auto_updates.yml`, run by
+`provision-server.sh` on every server):
+
+- package lists refresh at 02:30 and upgrades install at 03:30, each with
+  up to 15 minutes' random delay;
+- if a patch needs a reboot, the server reboots at **04:30 the same night**;
+- covers Ubuntu -security and -updates, plus Tailscale, CrowdSec and
+  `cloudflared`, which gets Cloudflare's apt repo for this;
+- old kernels are removed.
+
+The times and the package blacklist are in the role's defaults.
+
+**Visitor stats** (`playbooks/provisioning/goaccess.yml`): one GoAccess
+report per vhost every 15 minutes, with history kept across log rotations.
+They're served at `stats-<server fqdn>`, which you declare in `vhosts.yml`
+with `access: trusted`.
 
 
 ## Getting started

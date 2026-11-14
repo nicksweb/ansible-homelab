@@ -28,6 +28,9 @@
 #   --skip-beszel                  Don't install the Beszel monitoring agent (default: installed
 #                                  when BESZEL_HUB_URL is set; reaches the hub over the tailnet)
 #   --skip-lamp                   Skip LAMP install
+#   --skip-tuning                 LAMP only: skip lamp_tuning (swap, real visitor IPs behind Cloudflare,
+#                                  compression/caching, PHP-FPM/OPcache/MySQL sized from RAM)
+#   --skip-crowdsec               LAMP only: skip CrowdSec (detection, firewall bouncer, Apache-level bans)
 #   --skip-mysql                  Install Apache/PHP but skip local MySQL (this server
 #                                  expects to connect to a separate --db-only server instead)
 #   --db-only                     Install a standalone MySQL server instead of LAMP — no
@@ -68,7 +71,7 @@ case "${CLOUDFLARE_PROXY:-false}" in
   *) CF_PROXY="off" ;;
 esac
 SKIP_LAMP=false SKIP_HARDEN=false DRY_RUN=false ASSUME_YES=false
-SKIP_TAILSCALE=false SKIP_BESZEL=false
+SKIP_TAILSCALE=false SKIP_BESZEL=false SKIP_TUNING=false SKIP_CROWDSEC=false
 SKIP_MYSQL=false DB_ONLY=false DB_ALLOW_FROM=""
 DOCKER_ROLE=false DOCKER_NPM=true NPM_ADMIN_HOSTNAME="" NPM_PROXY_HOSTNAME="" TRUSTED_IPS_ARG="" EXTRA_SSH_KEY=""
 ENABLE_TLS=false LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-}"
@@ -89,6 +92,8 @@ while [ $# -gt 0 ]; do
     --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
     --skip-beszel) SKIP_BESZEL=true; shift ;;
     --skip-lamp) SKIP_LAMP=true; shift ;;
+    --skip-tuning) SKIP_TUNING=true; shift ;;
+    --skip-crowdsec) SKIP_CROWDSEC=true; shift ;;
     --skip-mysql) SKIP_MYSQL=true; shift ;;
     --db-only) DB_ONLY=true; shift ;;
     --db-allow-from) DB_ALLOW_FROM="$2"; shift 2 ;;
@@ -221,6 +226,24 @@ SIZES_JSON="$(bl_api GET "/sizes")" || die "Could not list sizes"
 SIZE_INFO="$(echo "$SIZES_JSON" | jq -c --arg p "$PLAN" '.sizes[] | select(.slug == $p)')"
 [ -n "$SIZE_INFO" ] || die "Plan/size '$PLAN' is not a valid BinaryLane size slug"
 echo "$SIZE_INFO" | jq -e '.available == true' >/dev/null || die "Plan '$PLAN' is not currently available"
+# `available` is true while a size is sold *somewhere*; per-region stock is in
+# regions_out_of_stock. Without this, an out-of-stock region only shows up at
+# create time as the generic "Unable to find a suitable host" in every region.
+OUT_OF_STOCK="$(echo "$SIZE_INFO" | jq -r '(.regions_out_of_stock // []) | join(" ")')"
+IN_STOCK_REGIONS=()
+for r in "${REGION_ATTEMPTS[@]}"; do
+  if [[ " $OUT_OF_STOCK " == *" $r "* ]]; then
+    warn "Plan '$PLAN' is out of stock in region '$r' — skipping it"
+  else
+    IN_STOCK_REGIONS+=("$r")
+  fi
+done
+if [ "${#IN_STOCK_REGIONS[@]}" -eq 0 ]; then
+  STOCKED_ANYWHERE="$(echo "$SIZE_INFO" | jq -r '((.regions // []) - (.regions_out_of_stock // [])) | join(", ")')"
+  die "Plan '$PLAN' is out of stock in every region tried (${REGION_ATTEMPTS[*]}). In stock in: ${STOCKED_ANYWHERE:-nowhere}. Try --region <one of those>, another --plan, or later."
+fi
+REGION="${IN_STOCK_REGIONS[0]}"
+REGION_ATTEMPTS=("${IN_STOCK_REGIONS[@]}")
 PLAN_MEM="$(echo "$SIZE_INFO" | jq -r '.memory')"
 PLAN_DISK="$(echo "$SIZE_INFO" | jq -r '.disk')"
 PLAN_VCPUS="$(echo "$SIZE_INFO" | jq -r '.vcpus')"
@@ -525,6 +548,13 @@ if ! $SKIP_HARDEN; then
   log "Stage 2/2 complete; SSH still reachable."
 fi
 
+log "Configuring automatic updates (nightly, reboot at 04:30 if a patch needs it)..."
+if ansible_run_playbook "playbooks/provisioning/auto_updates.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" '{}'; then
+  log "Automatic updates configured."
+else
+  warn "auto_updates failed — not fatal, but the server won't patch itself. Re-run: ansible-playbook -i provisioning/inventory playbooks/provisioning/auto_updates.yml -l $NAME"
+fi
+
 # ---------------------------------------------------------------------------
 # LAMP install, standalone MySQL for --db-only servers, or the Docker stack
 # for --role docker servers
@@ -574,6 +604,22 @@ elif ! $SKIP_LAMP; then
   unset LAMP_VARS
   LAMP_VERSIONS="$(ssh "${SSH_OPTS[@]}" "$ADMIN_USER@$PUBLIC_IP" 'echo "PHP: $(php -v | head -1)"; echo "Composer: $(composer --version 2>/dev/null | head -1)"; echo "Apache: $(apache2 -v | head -1)"' 2>/dev/null)"
   log "LAMP install complete."
+  if ! $SKIP_TUNING; then
+    log "Tuning the LAMP stack (swap, real visitor IPs, caching, PHP-FPM/OPcache/MySQL sized from RAM)..."
+    ansible_run_playbook "playbooks/provisioning/lamp_tuning.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" '{}' \
+      || die "lamp_tuning Ansible role failed"
+  fi
+  if ! $SKIP_CROWDSEC; then
+    log "Installing CrowdSec (detection, firewall bouncer, Apache-level bans)..."
+    CROWDSEC_VARS="$(jq -n --arg mgmt "${MANAGEMENT_IP:-}" --arg trusted "$TRUSTED_443" \
+      '{crowdsec_management_ip:$mgmt, crowdsec_trusted_ips:($trusted | split(",") | map(select(length > 0)))}')"
+    if ansible_run_playbook "playbooks/provisioning/crowdsec.yml" "$PUBLIC_IP" "$ADMIN_USER" "$PROVISIONING_SSH_KEY" "$CROWDSEC_VARS"; then
+      log "CrowdSec installed."
+    else
+      warn "CrowdSec install failed — not fatal. Re-run: ansible playbook playbooks/provisioning/crowdsec.yml against $NAME"
+    fi
+    unset CROWDSEC_VARS
+  fi
 fi
 
 # ---------------------------------------------------------------------------

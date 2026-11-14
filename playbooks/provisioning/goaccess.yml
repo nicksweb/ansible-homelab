@@ -1,0 +1,12 @@
+---
+# GoAccess visitor stats for every vhost on a LAMP server — see
+# playbooks/roles/provisioning/goaccess/defaults/main.yml. Run after vhosts.yml
+# (the stats hostname is itself a vhost with `access: trusted`).
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/goaccess.yml -l <server>
+- name: GoAccess visitor stats
+  hosts: provisioned
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/goaccess

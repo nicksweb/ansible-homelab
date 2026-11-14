@@ -1,0 +1,270 @@
+---
+# One app (loop_var php_app) — see defaults/main.yml.
+
+- name: "{{ php_app.name }}: where it lives"
+  ansible.builtin.set_fact:
+    php_app_dir: >-
+      {{ php_app_root ~ '/' ~ php_app.hostname
+         ~ ('' if (php_app.layout | default('webroot')) == 'laravel' else '/public')
+         ~ (('/' ~ php_app.path) if (php_app.path | default('')) | length > 0 else '') }}
+    php_app_marker: "/var/lib/php_app/{{ php_app.name }}.migrated"
+
+- name: "{{ php_app.name }}: already migrated?"
+  ansible.builtin.stat:
+    path: "{{ php_app_marker }}"
+  register: php_app_marker_stat
+  become: true
+
+- name: "{{ php_app.name }}: copy needed"
+  ansible.builtin.set_fact:
+    php_app_copy: "{{ php_app_refresh | bool or not php_app_marker_stat.stat.exists }}"
+
+- name: "{{ php_app.name }}: create the app directory"
+  ansible.builtin.file:
+    path: "{{ php_app_dir }}"
+    state: directory
+    owner: "{{ php_app_owner }}"
+    group: "{{ php_app_owner }}"
+    mode: '0755'
+  become: true
+
+- name: "{{ php_app.name }}: copy files from the control host"
+  # As root on the control host: source trees are owned by www-data and
+  # some files (storage/, configs) aren't readable by the admin user.
+  ansible.builtin.command:
+    argv: >-
+      {{ ['sudo', '-n', 'rsync', '-a', '--delete', '--stats',
+          '-e', 'ssh -i ' ~ php_app_ssh_key ~ ' -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=' ~ lookup('env', 'HOME') ~ '/.ssh/known_hosts',
+          '--rsync-path=sudo rsync']
+         + ((php_app_exclude_default + (php_app.exclude | default([]))) | map('regex_replace', '^', '--exclude=') | list)
+         + [php_app.source ~ '/',
+            ansible_user ~ '@' ~ ansible_host ~ ':' ~ php_app_dir ~ '/'] }}
+  delegate_to: localhost
+  become: false
+  when: php_app_copy
+  register: php_app_rsync
+  changed_when: "'Number of regular files transferred: 0' not in php_app_rsync.stdout"
+
+- name: "{{ php_app.name }}: hand the files to the web server user"
+  ansible.builtin.command: "chown -R {{ php_app_owner }}:{{ php_app_owner }} {{ php_app_dir }}"
+  become: true
+  when: php_app_copy
+  changed_when: false
+
+- name: "{{ php_app.name }}: point .htaccess PHP handlers at this server's PHP-FPM sockets"
+  # The old server named its pools /var/run/php/wwwX.Y.sock; Ubuntu's packages
+  # use /run/php/phpX.Y-fpm.sock. Apps that pin a handler in .htaccess would
+  # otherwise answer 503.
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -rlZ --include=.htaccess -E '/var/run/php/www[0-9]+\.[0-9]+\.sock' "{{ php_app_dir }}" \
+      | xargs -0 -r sed -i -E 's#/var/run/php/www([0-9]+\.[0-9]+)\.sock#/run/php/php\1-fpm.sock#g' -- \
+      && grep -rl --include=.htaccess -E '/run/php/php[0-9]+\.[0-9]+-fpm\.sock' "{{ php_app_dir }}" || true
+  args:
+    executable: /bin/bash
+  become: true
+  when: php_app_copy
+  register: php_app_sockfix
+  changed_when: php_app_sockfix.stdout | length > 0
+
+# --- Database -----------------------------------------------------------------
+
+- name: "{{ php_app.name }}: database"
+  when: php_app.db is defined
+  block:
+    - name: "{{ php_app.name }}: read the DB login from the source config"
+      ansible.builtin.slurp:
+        src: "{{ php_app.source }}/{{ php_app.db.config }}"
+      delegate_to: localhost
+      become: false
+      register: php_app_db_conf
+      no_log: true
+
+    - name: "{{ php_app.name }}: parse the DB login"
+      ansible.builtin.set_fact:
+        php_app_db_user: "{{ php_app_conf_text | regex_search(php_app_rx | replace('{key}', php_app.db.user_key | default('DB_USERNAME')), '\\1') | default([], true) | first | default('') }}"
+        php_app_db_pass: "{{ php_app_conf_text | regex_search(php_app_rx | replace('{key}', php_app.db.pass_key | default('DB_PASSWORD')), '\\1') | default([], true) | first | default('') }}"
+      vars:
+        php_app_conf_text: "{{ php_app_db_conf.content | b64decode }}"
+        php_app_rx: "{{ php_app_rx_define if (php_app.db.format | default('dotenv')) == 'define' else php_app_rx_dotenv }}"
+      no_log: true
+
+    - name: "{{ php_app.name }}: DB login found"
+      ansible.builtin.assert:
+        that: php_app_db_user | length > 0 and php_app_db_pass | length > 0
+        fail_msg: "Could not read the DB user/password from {{ php_app.source }}/{{ php_app.db.config }} ({{ php_app.db.format | default('dotenv') }})."
+        quiet: true
+
+    - name: "{{ php_app.name }}: create the database and its user (same login as the source)"
+      ansible.builtin.command:
+        cmd: mysql
+        stdin: |
+          CREATE DATABASE IF NOT EXISTS `{{ php_app.db.name }}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+          {% for h in ['localhost', '127.0.0.1'] %}
+          CREATE USER IF NOT EXISTS '{{ php_app_db_user }}'@'{{ h }}' IDENTIFIED BY '{{ php_app_db_pass | replace("'", "''") }}';
+          ALTER USER '{{ php_app_db_user }}'@'{{ h }}' IDENTIFIED BY '{{ php_app_db_pass | replace("'", "''") }}';
+          GRANT ALL PRIVILEGES ON `{{ php_app.db.name }}`.* TO '{{ php_app_db_user }}'@'{{ h }}';
+          {% endfor %}
+          FLUSH PRIVILEGES;
+      become: true
+      changed_when: false
+      no_log: true
+
+    - name: "{{ php_app.name }}: does the database have tables yet?"
+      ansible.builtin.command: >-
+        mysql -NBe "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='{{ php_app.db.name }}'"
+      become: true
+      register: php_app_db_tables
+      changed_when: false
+
+    - name: "{{ php_app.name }}: copy the data"
+      when: php_app_refresh | bool or php_app_db_tables.stdout | int == 0
+      block:
+        - name: "{{ php_app.name }}: dump on the control host"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            umask 077
+            cnf="$(mktemp)"; trap 'rm -f "$cnf"' EXIT
+            printf '[client]\nuser=%s\npassword="%s"\nhost=127.0.0.1\n' "$DBU" "$DBP" > "$cnf"
+            mysqldump --defaults-extra-file="$cnf" --single-transaction --quick --routines --triggers \
+              --no-tablespaces --set-gtid-purged=OFF "{{ php_app.db.name }}" | gzip > "{{ php_app_dump }}"
+          args:
+            executable: /bin/bash
+          environment:
+            DBU: "{{ php_app_db_user }}"
+            DBP: "{{ php_app_db_pass }}"
+          delegate_to: localhost
+          become: false
+          changed_when: true
+          no_log: true
+
+        - name: "{{ php_app.name }}: send the dump"
+          ansible.builtin.copy:
+            src: "{{ php_app_dump }}"
+            dest: "/root/{{ php_app.name }}.sql.gz"
+            owner: root
+            group: root
+            mode: '0600'
+          become: true
+
+        - name: "{{ php_app.name }}: import"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            gunzip -c /root/{{ php_app.name }}.sql.gz | mysql "{{ php_app.db.name }}"
+          args:
+            executable: /bin/bash
+          become: true
+          changed_when: true
+
+        - name: "{{ php_app.name }}: post-import SQL (e.g. the app's own URL)"
+          ansible.builtin.command:
+            cmd: mysql "{{ php_app.db.name }}"
+            stdin: "{% for q in php_app.import_sql | default([]) %}{{ q }};\n{% endfor %}"
+          become: true
+          when: (php_app.import_sql | default([])) | length > 0
+          changed_when: true
+
+        - name: "{{ php_app.name }}: safe mode — make the copy harmless"
+          ansible.builtin.command:
+            cmd: mysql "{{ php_app.db.name }}"
+            stdin: "{% for q in php_app.safe_sql | default([]) %}{{ q }};\n{% endfor %}"
+          become: true
+          when: php_app_safe_mode and (php_app.safe_sql | default([])) | length > 0
+          changed_when: true
+
+      always:
+        - name: "{{ php_app.name }}: remove the dumps"
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop:
+            - { path: "{{ php_app_dump }}", where: localhost }
+            - { path: "/root/{{ php_app.name }}.sql.gz", where: server }
+          loop_control:
+            label: "{{ item.where }}"
+          delegate_to: "{{ 'localhost' if item.where == 'localhost' else inventory_hostname }}"
+          become: "{{ item.where != 'localhost' }}"
+
+  vars:
+    php_app_dump: "/tmp/php_app-{{ inventory_hostname }}-{{ php_app.name }}.sql.gz"
+    # define('KEY', 'value')  or  KEY=value / KEY="value"
+    php_app_rx_define: "define\\(\\s*['\"]{key}['\"]\\s*,\\s*['\"]([^'\"]*)['\"]"
+    php_app_rx_dotenv: "(?m)^\\s*{key}\\s*=\\s*[\"']?([^\"'\\r\\n#]*?)[\"']?\\s*(?:#.*)?$"
+
+# --- Configuration ------------------------------------------------------------
+
+- name: "{{ php_app.name }}: does it have a .env?"
+  ansible.builtin.stat:
+    path: "{{ php_app_dir }}/.env"
+  register: php_app_dotenv
+  become: true
+
+- name: "{{ php_app.name }}: .env overrides"
+  ansible.builtin.lineinfile:
+    path: "{{ php_app_dir }}/.env"
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+  loop: >-
+    {{ ((php_app.env | default({}))
+        | combine({'MAIL_MAILER': 'log'} if (php_app_safe_mode and php_app_dotenv.stat.exists) else {}))
+       | dict2items }}
+  become: true
+  register: php_app_env
+
+- name: "{{ php_app.name }}: is it a Laravel app?"
+  ansible.builtin.stat:
+    path: "{{ php_app_dir }}/artisan"
+  register: php_app_artisan
+  become: true
+
+- name: "{{ php_app.name }}: clear Laravel's caches (paths and settings changed)"
+  ansible.builtin.command: php artisan optimize:clear
+  args:
+    chdir: "{{ php_app_dir }}"
+  become: true
+  become_user: "{{ php_app_owner }}"
+  when: php_app_artisan.stat.exists and (php_app_copy or php_app_env is changed)
+  changed_when: true
+
+# --- Scheduled jobs -----------------------------------------------------------
+
+- name: "{{ php_app.name }}: cron jobs"
+  ansible.builtin.copy:
+    dest: "/etc/cron.d/php-app-{{ php_app.name }}"
+    content: |
+      # Managed by Ansible (provisioning/php_app: {{ php_app.name }}).
+      SHELL=/bin/sh
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      {% for line in php_app.cron | default([]) %}
+      {{ (line.split(' ', 5)[:5] | join(' ')) }} {{ php_app_owner }} {{ line.split(' ', 5)[5] | replace('{root}', php_app_dir) }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: not php_app_safe_mode and (php_app.cron | default([])) | length > 0
+
+- name: "{{ php_app.name }}: no cron jobs (safe mode or none declared)"
+  ansible.builtin.file:
+    path: "/etc/cron.d/php-app-{{ php_app.name }}"
+    state: absent
+  become: true
+  when: php_app_safe_mode or (php_app.cron | default([])) | length == 0
+
+- name: "{{ php_app.name }}: marker directory (outside every webroot)"
+  ansible.builtin.file:
+    path: /var/lib/php_app
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  become: true
+
+- name: "{{ php_app.name }}: mark as migrated"
+  ansible.builtin.copy:
+    dest: "{{ php_app_marker }}"
+    content: "Migrated from {{ php_app.source }} by Ansible (provisioning/php_app).\n"
+    owner: root
+    group: root
+    mode: '0600'
+  become: true

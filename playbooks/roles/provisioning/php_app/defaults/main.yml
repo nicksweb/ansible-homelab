@@ -1,0 +1,65 @@
+---
+# PHP applications (Laravel apps, osTicket, small PHP tools) on a LAMP server,
+# migrated from a source tree on the control host. Declared per server in
+# provisioning/inventory/host_vars/<server>/apps.yml (gitignored, like
+# vhosts.yml). Each app's hostname must already be a vhost (vhosts.yml).
+#
+#   apps:
+#     - name: helpdesk                     # short id: cron file, logs, labels
+#       hostname: help.example.com         # the vhost it lives in
+#       layout: webroot                    # webroot: files go in the vhost's public/ (+ path)
+#                                          # laravel: app root is the vhost dir, its public/ is the webroot
+#       path: ""                           # sub-path under public/ (webroot layout), e.g. projects/tool
+#       smoke_path: /projects/tool/public/ # where smoke-test.sh checks it (default /<path>/)
+#       source: /var/www/html/helpdesk     # on the control host
+#       exclude: [cache/]                  # extra rsync excludes (relative to source)
+#       db:                                # optional
+#         name: helpdesk
+#         config: include/config.php       # file holding the DB login, relative to source
+#         format: define                   # define (PHP define()) | dotenv
+#         user_key: DBUSER                 # define/env key of the DB user
+#         pass_key: DBPASS                 # define/env key of the DB password
+#       env:                               # dotenv overrides (laravel or any app with .env)
+#         APP_URL: https://help.example.com
+#       cron:                              # installed only when not in safe mode
+#         - "*/5 * * * * php -f {root}/api/cron.php"     # {root} = the app's directory
+#       import_sql:                        # run after every import (e.g. the app's own URL)
+#         - "UPDATE ost_config SET value='https://help.example.com/' WHERE `key`='helpdesk_url'"
+#       safe_sql:                          # run once after import, in safe mode only
+#         - "UPDATE ost_config SET value='0' WHERE `key`='enable_mail_polling'"
+#
+#   app_files:                             # single files, e.g. form handlers' secrets
+#     - src: /var/www/html/.env            # on the control host
+#       dest: /var/www/html/sites/www.example.com/.env
+#
+# Data: a database is imported only when it has no tables yet, or with
+# -e php_app_refresh=true (re-copy files and data from the source).
+
+php_app_root: /var/www/html/sites
+php_app_owner: www-data
+
+# Pre-prod safety. With safe mode on:
+# - app crons are not installed;
+# - each app's safe_sql runs after import (e.g. turn off mailbox polling);
+# - Laravel apps get MAIL_MAILER=log;
+# - outbound mail ports are blocked in the firewall, as the backstop.
+php_app_safe_mode: false
+php_app_blocked_mail_ports: [25, 465, 587, 2525, 110, 143, 993, 995]
+
+php_app_refresh: false
+
+# Extensions apps on the old server relied on, on top of lamp_stack's.
+php_app_php_packages:
+  - php-apcu
+  - php-imagick
+  - php-imap
+  - php-sqlite3
+  - php-ssh2
+
+# Never copied: caches and compiled views are rebuilt on the server.
+php_app_exclude_default:
+  - "storage/framework/cache/data/*"
+  - "storage/framework/views/*.php"
+  - "bootstrap/cache/*.php"
+
+php_app_ssh_key: "{{ ansible_ssh_private_key_file }}"

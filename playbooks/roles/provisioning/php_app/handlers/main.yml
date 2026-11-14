@@ -1,0 +1,8 @@
+---
+- name: Restart every PHP-FPM version (new extensions)
+  ansible.builtin.shell: |
+    for u in $(systemctl list-units --type=service --no-legend 'php*-fpm.service' | awk '{print $1}'); do
+      systemctl restart "$u"
+    done
+  become: true
+  listen: "restart php-fpm (apps)"

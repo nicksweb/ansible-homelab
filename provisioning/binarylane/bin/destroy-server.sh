@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Usage: destroy-server.sh <name> [--yes]
+# Usage: destroy-server.sh <name> [--yes] [--keep-config]
+#
+# --keep-config  keep provisioning/inventory/host_vars/<name> (vhosts.yml,
+#                apps.yml) in place instead of archiving it, for a rebuild
+#                under the same name (bin/rebuild-server.sh uses this).
 #
 # Destroys a BinaryLane server previously created by this toolkit, its
 # Cloudflare A record, and (if applicable) its Cloudflare Tunnel ingress rule
@@ -15,9 +19,16 @@ source "$HERE/lib/common.sh"
 source "$PROVISIONING_ROOT/common/ansible.sh"
 require_jq
 
-NAME="${1:?usage: destroy-server.sh <name> [--yes]}"
+NAME="${1:?usage: destroy-server.sh <name> [--yes] [--keep-config]}"
 ASSUME_YES=false
-[ "${2:-}" = "--yes" ] && ASSUME_YES=true
+export KEEP_HOST_VARS=false
+for arg in "${@:2}"; do
+  case "$arg" in
+    --yes) ASSUME_YES=true ;;
+    --keep-config) KEEP_HOST_VARS=true ;;
+    *) die "Unknown option: $arg" ;;
+  esac
+done
 
 state_exists "$NAME" || die "No local state for '$NAME' — refusing to guess. Nothing to destroy."
 STATUS="$(state_read_field "$NAME" '.status')"

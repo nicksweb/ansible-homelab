@@ -1,0 +1,176 @@
+---
+# Tunes a lamp_stack server for serving efficiently on small RAM: swap, real
+# visitor IPs behind Cloudflare (mod_remoteip), compression + browser caching,
+# PHP-FPM/OPcache sized from RAM, and a small-box MySQL profile. Idempotent;
+# safe to re-run after a resize (sizes are recomputed from RAM each run).
+
+- name: Gather memory facts
+  ansible.builtin.setup:
+    gather_subset: [min, hardware]
+
+- name: Detect the installed PHP version
+  check_mode: false
+  ansible.builtin.command: php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;'
+  register: lamp_tuning_php_probe
+  changed_when: false
+
+- name: Compute sizes from RAM
+  ansible.builtin.set_fact:
+    lamp_tuning_php_version: "{{ lamp_tuning_php_probe.stdout }}"
+    lamp_tuning_fpm_max_children: >-
+      {{ [[((ansible_memtotal_mb - lamp_tuning_fpm_reserved_mb) / lamp_tuning_fpm_worker_mb) | int,
+           lamp_tuning_fpm_min_children] | max, lamp_tuning_fpm_max_children_cap] | min }}
+    lamp_tuning_mysql_buffer_pool_mb: >-
+      {{ [(ansible_memtotal_mb * lamp_tuning_mysql_buffer_pool_pct / 100) | int,
+          lamp_tuning_mysql_buffer_pool_min_mb] | max }}
+
+# --- Swap -------------------------------------------------------------------
+
+- name: Create a swap file when the server has none
+  when: ansible_swaptotal_mb | int == 0
+  become: true
+  block:
+    - name: Allocate /swapfile
+      ansible.builtin.command: "fallocate -l {{ lamp_tuning_swap_mb }}M /swapfile"
+      args:
+        creates: /swapfile
+
+    - name: Restrict /swapfile
+      ansible.builtin.file:
+        path: /swapfile
+        mode: '0600'
+
+    - name: Format /swapfile
+      ansible.builtin.command: mkswap /swapfile
+      changed_when: true
+
+    - name: Enable /swapfile
+      ansible.builtin.command: swapon /swapfile
+      changed_when: true
+
+    - name: Mount swap at boot
+      ansible.posix.mount:
+        src: /swapfile
+        path: none
+        fstype: swap
+        opts: sw
+        state: present
+
+- name: Prefer RAM over swap
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "{{ lamp_tuning_swappiness }}"
+    sysctl_file: /etc/sysctl.d/60-lamp-tuning.conf
+  become: true
+
+# --- Apache -----------------------------------------------------------------
+
+- name: Fetch Cloudflare's edge ranges
+  check_mode: false
+  ansible.builtin.uri:
+    url: "{{ item }}"
+    return_content: true
+  loop: "{{ lamp_tuning_cloudflare_ip_urls }}"
+  register: lamp_tuning_cf_ranges
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Parse Cloudflare's edge ranges
+  ansible.builtin.set_fact:
+    lamp_tuning_cloudflare_ranges: "{{ lamp_tuning_cf_ranges.results | map(attribute='content') | map('split') | flatten | select | list }}"
+
+- name: Refuse an empty Cloudflare range list
+  ansible.builtin.assert:
+    that: lamp_tuning_cloudflare_ranges | length > 5
+    fail_msg: "Cloudflare's IP list came back empty or short — not writing a remoteip config from it."
+
+- name: Enable Apache modules for real IPs, brotli and caching
+  community.general.apache2_module:
+    name: "{{ item }}"
+    state: present
+  loop: [remoteip, brotli, deflate, expires, headers]
+  become: true
+  notify: "reload apache"
+
+- name: Write Apache confs
+  ansible.builtin.template:
+    src: "{{ item }}.conf.j2"
+    dest: "/etc/apache2/conf-available/{{ item }}.conf"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: [remoteip-cloudflare, web-performance]
+  become: true
+  notify: "reload apache"
+
+- name: Enable Apache confs
+  ansible.builtin.command: "a2enconf {{ item }}"
+  args:
+    creates: "/etc/apache2/conf-enabled/{{ item }}.conf"
+  loop: [remoteip-cloudflare, web-performance]
+  become: true
+  notify: "reload apache"
+
+- name: Validate the Apache config
+  ansible.builtin.command: apache2ctl configtest
+  become: true
+  changed_when: false
+
+# --- PHP-FPM + OPcache ------------------------------------------------------
+
+- name: Size the default PHP-FPM pool
+  community.general.ini_file:
+    path: "/etc/php/{{ lamp_tuning_php_version }}/fpm/pool.d/www.conf"
+    section: www
+    option: "{{ item.key }}"
+    value: "{{ item.value }}"
+    no_extra_spaces: false
+  loop: "{{ lamp_tuning_fpm_settings | dict2items }}"
+  vars:
+    lamp_tuning_fpm_settings:
+      pm: "{{ lamp_tuning_fpm_pm }}"
+      pm.max_children: "{{ lamp_tuning_fpm_max_children }}"
+      pm.process_idle_timeout: "{{ lamp_tuning_fpm_idle_timeout }}"
+      pm.max_requests: "{{ lamp_tuning_fpm_max_requests }}"
+  become: true
+  notify: "restart php-fpm"
+
+- name: Write the OPcache settings
+  ansible.builtin.template:
+    src: opcache-tuning.ini.j2
+    dest: "/etc/php/{{ lamp_tuning_php_version }}/fpm/conf.d/90-opcache-tuning.ini"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  notify: "restart php-fpm"
+
+# --- MySQL ------------------------------------------------------------------
+
+- name: Check for MySQL
+  ansible.builtin.stat:
+    path: /etc/mysql/mysql.conf.d
+  register: lamp_tuning_mysql_dir
+
+- name: Write the small-box MySQL profile
+  ansible.builtin.template:
+    src: mysqld-tuning.cnf.j2
+    dest: /etc/mysql/mysql.conf.d/zz-tuning.cnf
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+  when: lamp_tuning_mysql and lamp_tuning_mysql_dir.stat.exists
+  notify: "restart mysql"
+
+- name: Apply changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      RAM {{ ansible_memtotal_mb }}MB; PHP-FPM {{ lamp_tuning_fpm_pm }} max_children={{ lamp_tuning_fpm_max_children }};
+      OPcache {{ lamp_tuning_opcache_memory_mb }}MB;
+      MySQL buffer pool {{ lamp_tuning_mysql_buffer_pool_mb }}MB, performance_schema {{ 'on' if lamp_tuning_mysql_performance_schema else 'off' }};
+      real IPs from CF-Connecting-IP ({{ lamp_tuning_cloudflare_ranges | length }} Cloudflare ranges trusted).
