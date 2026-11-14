@@ -1,0 +1,13 @@
+---
+# Migrate the PHP apps declared in provisioning/inventory/host_vars/<server>/apps.yml
+# (see playbooks/roles/provisioning/php_app/defaults/main.yml). Run after vhosts.yml.
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/php_apps.yml -l <server>
+#   ... -e php_app_safe_mode=true      # pre-prod copy: no crons, no outbound mail
+#   ... -e php_app_refresh=true        # re-copy files and data from the source
+- name: PHP apps
+  hosts: provisioned
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/php_app

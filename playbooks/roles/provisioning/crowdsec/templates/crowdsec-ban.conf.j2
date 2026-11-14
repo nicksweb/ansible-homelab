@@ -1,0 +1,9 @@
+# Managed by Ansible (provisioning/crowdsec). Included inside every vhost via
+# /etc/apache2/vhost-common.d/. Refuses visitors this server's CrowdSec has
+# banned. %{REMOTE_ADDR} is the real client (mod_remoteip, lamp_tuning), so
+# this also covers traffic arriving through the Cloudflare tunnel. Runs at
+# server level, ahead of any .htaccess rewrites.
+RewriteEngine On
+RewriteMap crowdsec_ban "txt:{{ crowdsec_apache_map }}"
+RewriteCond "${crowdsec_ban:%{REMOTE_ADDR}|ok}" "!=ok"
+RewriteRule ^ - [F]

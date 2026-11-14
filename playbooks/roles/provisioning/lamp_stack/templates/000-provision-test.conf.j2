@@ -2,6 +2,11 @@
     ServerAdmin webmaster@localhost
     ServerName {{ lamp_stack_effective_welcome_fqdn }}
     DocumentRoot /var/www/html/provision-test
+    # Per-vhost snippets shared by every site (e.g. CrowdSec bans). Apache
+    # doesn't inherit rewrite rules into vhosts, so they're included here.
+    IncludeOptional /etc/apache2/vhost-common.d/*.conf
+    # This site only (vhosts options such as noindex / access: trusted).
+    IncludeOptional /etc/apache2/vhost-extra.d/{{ lamp_stack_effective_welcome_fqdn }}/*.conf
     ErrorLog ${APACHE_LOG_DIR}/provision-test.error.log
     CustomLog ${APACHE_LOG_DIR}/provision-test.access.log combined
     <Directory /var/www/html/provision-test>

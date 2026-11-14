@@ -1,0 +1,47 @@
+# Managed by Ansible (provisioning/lamp_tuning). Compression and browser
+# caching for every vhost.
+
+# Brotli first for clients that accept it, gzip (deflate) otherwise.
+<IfModule mod_brotli.c>
+    AddOutputFilterByType BROTLI_COMPRESS text/html text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/rss+xml application/atom+xml image/svg+xml application/manifest+json font/ttf font/otf
+</IfModule>
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml text/javascript application/javascript application/json application/xml application/rss+xml application/atom+xml image/svg+xml application/manifest+json font/ttf font/otf
+</IfModule>
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresDefault "{{ lamp_tuning_cache_html }}"
+    ExpiresByType text/html "{{ lamp_tuning_cache_html }}"
+    ExpiresByType application/xml "{{ lamp_tuning_cache_html }}"
+    ExpiresByType application/json "{{ lamp_tuning_cache_html }}"
+    ExpiresByType application/rss+xml "{{ lamp_tuning_cache_html }}"
+    ExpiresByType text/css "{{ lamp_tuning_cache_css_js }}"
+    ExpiresByType text/javascript "{{ lamp_tuning_cache_css_js }}"
+    ExpiresByType application/javascript "{{ lamp_tuning_cache_css_js }}"
+    ExpiresByType image/svg+xml "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/png "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/jpeg "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/gif "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/webp "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/avif "{{ lamp_tuning_cache_media }}"
+    ExpiresByType image/x-icon "{{ lamp_tuning_cache_media }}"
+    ExpiresByType font/woff2 "{{ lamp_tuning_cache_media }}"
+    ExpiresByType font/woff "{{ lamp_tuning_cache_media }}"
+    ExpiresByType font/ttf "{{ lamp_tuning_cache_media }}"
+    ExpiresByType video/mp4 "{{ lamp_tuning_cache_media }}"
+    ExpiresByType application/pdf "{{ lamp_tuning_cache_media }}"
+</IfModule>
+
+# Don't let PHP responses (forms, apps) be cached by browsers or Cloudflare.
+<FilesMatch "\.php$">
+    <IfModule mod_expires.c>
+        ExpiresActive Off
+    </IfModule>
+    Header set Cache-Control "no-store, private"
+</FilesMatch>
+
+# Small hardening that costs nothing.
+ServerTokens Prod
+ServerSignature Off
+FileETag MTime Size

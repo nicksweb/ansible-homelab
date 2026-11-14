@@ -84,7 +84,7 @@ ansible_run_playbook_root() {
 # provisioning/inventory (plus a cloud server's UDM host record), via the
 # vhosts playbook in teardown mode, which never touches the server itself.
 # Then archives its host_vars so a future server reusing the name starts
-# with no vhosts. Must run while <name>'s state is still live (the dynamic
+# with no vhosts (unless KEEP_HOST_VARS=true: a rebuild under the same name). Must run while <name>'s state is still live (the dynamic
 # inventory skips DESTROYED servers).
 ansible_vhosts_teardown() {
   local name="$1" inv="$ANSIBLE_REPO_ROOT/provisioning/inventory" rc=0
@@ -97,8 +97,12 @@ ansible_vhosts_teardown() {
   ANSIBLE_CONFIG="$ANSIBLE_REPO_ROOT/ansible.cfg" ansible-playbook -i "$inv" \
     "$ANSIBLE_REPO_ROOT/playbooks/provisioning/vhosts.yml" -l "$name" -e vhosts_teardown=true >&2 || rc=$?
   if [ "$rc" -eq 0 ] && [ -d "$hv" ]; then
-    mv "$hv" "$hv.destroyed-$(date +%Y%m%d-%H%M%S)"
-    log "Archived $hv"
+    if [ "${KEEP_HOST_VARS:-false}" = true ]; then
+      log "Kept $hv for the rebuild (--keep-config)"
+    else
+      mv "$hv" "$hv.destroyed-$(date +%Y%m%d-%H%M%S)"
+      log "Archived $hv"
+    fi
   fi
   return $rc
 }

@@ -1,0 +1,21 @@
+---
+- name: Reload apache
+  ansible.builtin.systemd:
+    name: apache2
+    state: reloaded
+  become: true
+  listen: "reload apache"
+
+- name: Restart php-fpm
+  ansible.builtin.systemd:
+    name: "php{{ lamp_tuning_php_version }}-fpm"
+    state: restarted
+  become: true
+  listen: "restart php-fpm"
+
+- name: Restart mysql
+  ansible.builtin.systemd:
+    name: mysql
+    state: restarted
+  become: true
+  listen: "restart mysql"

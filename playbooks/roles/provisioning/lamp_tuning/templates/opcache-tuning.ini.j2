@@ -1,0 +1,8 @@
+; Managed by Ansible (provisioning/lamp_tuning).
+opcache.enable=1
+opcache.memory_consumption={{ lamp_tuning_opcache_memory_mb }}
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files={{ lamp_tuning_opcache_max_files }}
+opcache.validate_timestamps=1
+opcache.revalidate_freq={{ lamp_tuning_opcache_revalidate_freq }}
+expose_php=Off

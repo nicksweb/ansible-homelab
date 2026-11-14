@@ -292,6 +292,51 @@ Apache 2 (rewrite/headers/ssl/proxy_fcgi), MySQL 8 (bound to `127.0.0.1`
 only), PHP 8.3 (cli, fpm, mysql, curl, mbstring, xml, zip, gd, intl,
 bcmath), Composer, Git, certbot, plus base admin tooling.
 
+### Tuning (`lamp_tuning`, on by default; `--skip-tuning` to omit)
+
+Sized from the server's RAM each run, so the same role suits a 2GB pre-prod
+box and a larger prod one (re-run it after a resize):
+
+- **Swap**: a 2GB `/swapfile` when the server has none, `vm.swappiness=10`.
+- **Real visitor IPs**: `mod_remoteip` trusts `CF-Connecting-IP` from
+  cloudflared (loopback) and Cloudflare's published ranges only, and the
+  `combined` log format logs `%a`. Logs, CrowdSec and PHP's `REMOTE_ADDR`
+  see the visitor, not `127.0.0.1`.
+- **Compression and caching**: brotli, falling back to gzip; browser cache
+  of 7 days for CSS/JS and 30 days for images/fonts; HTML revalidates
+  every time so a publish shows straight away; PHP responses are
+  `no-store`.
+- **PHP-FPM**: `pm = ondemand` (idle cost near zero on a mostly-static box),
+  `max_children` = (RAM − 1GB) / 64MB, capped at 40; OPcache 128MB.
+- **MySQL**: `performance_schema` off (~400MB saved on MySQL 8), buffer pool
+  20% of RAM, `max_connections` 60.
+
+### CrowdSec (`crowdsec`, on by default; `--skip-crowdsec` to omit)
+
+- **Detection** reads the Apache, auth (sshd), syslog and MySQL logs that
+  CrowdSec's own setup detects, with the `apache2`, `base-http-scenarios`,
+  `http-cve`, `linux`/`sshd` and `whitelist-good-actors` collections.
+- **Never banned**: loopback, the tailnet, the management IP and
+  `TRUSTED_443_IPS` (`/etc/crowdsec/parsers/s02-enrich/zz-trusted-ips.yaml`).
+- **Firewall bouncer** (iptables + ipset) blocks banned addresses on the
+  direct path: SSH, and LAN clients' direct 443.
+- **Apache-level bans** cover visitors through the Cloudflare tunnel, which
+  reach Apache from localhost, so no firewall rule can see them. CrowdSec's
+  official custom bouncer writes this server's own decisions into
+  `/var/lib/crowdsec-apache/banned.map`; every vhost includes
+  `/etc/apache2/vhost-common.d/crowdsec-ban.conf`, which returns 403 to a
+  listed `REMOTE_ADDR`. Apache re-reads the map when it changes, with no
+  reloads. Only local decisions (origins `crowdsec`, `cscli`), not the
+  community blocklist, and single IPs only (ranges are left to the
+  firewall).
+- Useful commands: `sudo cscli decisions list`, `sudo cscli alerts list`,
+  `sudo cscli metrics`, and `sudo cscli decisions delete --ip <ip>` to lift
+  a ban.
+
+Every vhost template includes `/etc/apache2/vhost-common.d/*.conf`, a hook
+for rules that must apply to all sites. Apache doesn't inherit rewrite
+rules into vhosts, even with `RewriteOptions InheritDown`.
+
 ### TLS for the server's own hostname
 
 ```bash
@@ -315,8 +360,10 @@ Idempotent — a rebuild under the same name detects the existing certificate.
   gets an explicit allow rule alongside the general SSH rule
 - Fail2ban with an `sshd` jail, `ignoreip` covering the management IP,
   `banaction` pinned to `iptables-multiport`
-- `unattended-upgrades` enabled
+- Automatic updates (`auto_updates`), nightly, with a reboot at 04:30 when a patch needs one;
+  covers Ubuntu security and updates, Tailscale, CrowdSec and `cloudflared`
 - MySQL bound to loopback only
+- CrowdSec detection, with firewall and Apache-level bans (see above)
 - Dedicated provisioning SSH key, never reused from any other purpose,
   never leaves the control host
 
@@ -358,6 +405,19 @@ installs (naturally idempotent).
 - Tunnel ingress not taking effect — `sudo cat /etc/cloudflared/config.yml`,
   `sudo cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate`,
   `journalctl -u cloudflared -n 50 --no-pager`.
+- "Plan '...' is out of stock in every region tried": BinaryLane lists a
+  size as `available` while it's sold anywhere; per-region stock is in
+  `regions_out_of_stock`, which the plan step checks (the create call
+  would otherwise just say "Unable to find a suitable host" in each
+  region). The error names the regions that do have it: pass
+  `--region <one>`, choose another `--plan`, or try later.
+- SSH to a new server times out from the control host while ports 80/443
+  and ping still work, and other LAN hosts can connect: suspect the UDM's
+  Intrusion Prevention. Ansible's burst of SSH sessions can look like an
+  outbound SSH scan, and the UDM then blocks that flow for a few minutes.
+  The server can't be the cause, because every LAN host shares one public
+  IP. Suppress the signature, or allow-list the control host, under
+  CyberSecure → Intrusion Prevention.
 
 ## What can't reasonably be automated
 

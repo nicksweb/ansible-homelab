@@ -1,0 +1,28 @@
+---
+# GoAccess visitor stats for every Apache vhost on a LAMP server.
+#
+# One HTML report per site, regenerated every goaccess_interval from the
+# site's access log (real visitor IPs via lamp_tuning's mod_remoteip).
+# GoAccess's on-disk database (--persist/--restore) keeps history across
+# runs and log rotations, and Apache's logrotate runs one last report before
+# each rotation (/etc/logrotate.d/httpd-prerotate/), so no lines are missed.
+#
+# Reports are written into the webroot of goaccess_hostname. Declare that
+# hostname as a vhost with `access: trusted` (office/tailnet only) and
+# `php: none`, e.g. in host_vars/<server>/vhosts.yml:
+#   - hostname: stats-<server>.example.com
+#     access: trusted
+#     noindex: true
+#     php: none
+
+goaccess_hostname: "stats-{{ prov_fqdn }}"
+goaccess_webroot: "/var/www/html/sites/{{ goaccess_hostname }}/public"
+goaccess_db_dir: /var/lib/goaccess
+goaccess_interval: 15min
+
+# Vhosts whose logs aren't worth a report.
+goaccess_skip:
+  - "{{ goaccess_hostname }}"
+
+# Extra goaccess flags. -a lists user agents per visitor host.
+goaccess_args: "-a"

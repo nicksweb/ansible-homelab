@@ -1,0 +1,12 @@
+---
+# Unattended upgrades + reboot-if-needed every night — see
+# playbooks/roles/provisioning/auto_updates/defaults/main.yml.
+# provision-server.sh runs this for every new server; to (re)apply by hand:
+#
+#   ansible-playbook -i provisioning/inventory playbooks/provisioning/auto_updates.yml [-l <server>]
+- name: Automatic updates
+  hosts: all
+  become: true
+  gather_facts: false
+  roles:
+    - provisioning/auto_updates

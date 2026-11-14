@@ -46,6 +46,77 @@
     loop_var: vhosts_item
     label: "{{ vhosts_item.hostname }}"
 
+- name: Create each vhost's snippet directory
+  ansible.builtin.file:
+    path: "/etc/apache2/vhost-extra.d/{{ vhosts_item.hostname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: vhosts_lamp
+  loop: "{{ vhosts_present }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+
+- name: Per-vhost option snippets (noindex, access) — included by each vhost
+  # Every vhost template includes /etc/apache2/vhost-extra.d/<hostname>/*.conf.
+  # Written for set options, removed for unset ones and for absent vhosts.
+  ansible.builtin.copy:
+    dest: "/etc/apache2/vhost-extra.d/{{ vhosts_item.0.hostname }}/{{ vhosts_item.1.file }}"
+    content: "{{ vhosts_item.1.content }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: vhosts_lamp and ((vhosts_item.1.file == 'noindex.conf' and vhosts_item.0.noindex) or (vhosts_item.1.file == 'access.conf' and vhosts_item.0.access == 'trusted'))
+  loop: "{{ vhosts_present | product(vhosts_option_snippets) | list }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.0.hostname }} {{ vhosts_item.1.file }}"
+  register: vhosts_snippets_written
+  vars: &vhosts_snippet_vars
+    vhosts_allow: "{{ (vhosts_trusted_always + (prov_trusted_ips | default([]))) | unique | join(' ') }}"
+    vhosts_option_snippets:
+      - file: noindex.conf
+        content: |
+          # Managed by Ansible (vhosts: noindex). Keep this copy out of search engines.
+          Header always set X-Robots-Tag "noindex, nofollow"
+      - file: access.conf
+        content: |
+          # Managed by Ansible (vhosts: access: trusted). Office/management IPs
+          # and the tailnet only; tunnel visitors are matched on their real IP.
+          <Location "/">
+              Require ip {{ vhosts_allow }}
+          </Location>
+
+- name: Remove snippets for options that are off
+  ansible.builtin.file:
+    path: "/etc/apache2/vhost-extra.d/{{ vhosts_item.0.hostname }}/{{ vhosts_item.1.file }}"
+    state: absent
+  when: vhosts_lamp and not ((vhosts_item.1.file == 'noindex.conf' and vhosts_item.0.noindex) or (vhosts_item.1.file == 'access.conf' and vhosts_item.0.access == 'trusted'))
+  loop: "{{ vhosts_present | product(vhosts_option_snippets) | list }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.0.hostname }} {{ vhosts_item.1.file }}"
+  register: vhosts_snippets_removed
+  vars: *vhosts_snippet_vars
+
+- name: Remove snippets of absent vhosts
+  ansible.builtin.file:
+    path: "/etc/apache2/vhost-extra.d/{{ vhosts_item.hostname }}"
+    state: absent
+  loop: "{{ vhosts_absent }}"
+  loop_control:
+    loop_var: vhosts_item
+    label: "{{ vhosts_item.hostname }}"
+  register: vhosts_snippets_dirs_removed
+
+- name: Reload Apache for snippet changes
+  ansible.builtin.systemd:
+    name: apache2
+    state: reloaded
+  when: vhosts_snippets_written is changed or vhosts_snippets_removed is changed or vhosts_snippets_dirs_removed is changed
+
 - name: Remove the Apache vhosts and certs of absent entries (webroots are kept)
   ansible.builtin.shell: |
     set -e

@@ -2,6 +2,11 @@
     ServerAdmin webmaster@{{ site_vhost_hostname }}
     ServerName {{ site_vhost_hostname }}
     DocumentRoot {{ site_vhost_effective_webroot }}
+    # Per-vhost snippets shared by every site (e.g. CrowdSec bans). Apache
+    # doesn't inherit rewrite rules into vhosts, so they're included here.
+    IncludeOptional /etc/apache2/vhost-common.d/*.conf
+    # This site only (vhosts options such as noindex / access: trusted).
+    IncludeOptional /etc/apache2/vhost-extra.d/{{ site_vhost_hostname }}/*.conf
 
     ErrorLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.error.log
     CustomLog ${APACHE_LOG_DIR}/{{ site_vhost_hostname }}.access.log combined

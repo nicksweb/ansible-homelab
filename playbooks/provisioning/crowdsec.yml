@@ -1,0 +1,7 @@
+---
+- name: CrowdSec detection + firewall/Apache bouncers
+  hosts: target
+  become: false
+  gather_facts: false
+  roles:
+    - provisioning/crowdsec

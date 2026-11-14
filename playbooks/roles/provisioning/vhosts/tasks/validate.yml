@@ -21,7 +21,9 @@
               'service': e.service | default('') | string,
               'php': e.php | default('') | string,
               'udm': e.udm | default(vhosts_udm) | bool,
-              'takeover': e.takeover | default(false) | bool}) -%}
+              'takeover': e.takeover | default(false) | bool,
+              'noindex': e.noindex | default(false) | bool,
+              'access': e.access | default('public') | string}) -%}
       {%- endfor -%}
       {{ out }}
     vhosts_base_names: "{{ prov_base_routes | map(attribute='hostname') | list }}"
@@ -41,12 +43,15 @@
       - item.service == '' or item.service is match('^https?://[A-Za-z0-9._-]+(:[0-9]+)?/?$')
       - item.php == '' or vhosts_lamp
       - item.php == '' or item.php is match('^(none|highest|[0-9]+\.[0-9]+)$')
+      - item.access in ['public', 'trusted']
+      - (item.access == 'public' and not item.noindex) or vhosts_lamp
     fail_msg: >-
       Bad vhost entry {{ item }}. Needs a valid lowercase hostname and state
       present|absent; must not repeat a hostname the provisioning script
       already routes ({{ vhosts_base_names | join(', ') }}); `service`
       (http://container:port) is only for docker-static servers, `php`
-      (none|highest|8.3) only for LAMP servers.
+      (none|highest|8.3), `noindex` and `access` (public|trusted) only for
+      LAMP servers.
     quiet: true
   loop: "{{ vhosts_list }}"
   loop_control:

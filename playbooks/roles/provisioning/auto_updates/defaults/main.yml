@@ -1,0 +1,34 @@
+---
+# Unattended upgrades with automatic reboots, for every provisioned server.
+#
+# Nightly: package lists refresh at auto_updates_lists_time, upgrades install
+# at auto_updates_upgrade_time, and if any of them needs a reboot (kernel,
+# libc, ...) the server reboots at auto_updates_reboot_time the same night,
+# so a patch is never more than a day from taking effect.
+#
+# Ubuntu's default only takes -security and never reboots; this adds
+# -updates plus the third-party repos the provisioning roles install from
+# (Tailscale, CrowdSec, Cloudflare's cloudflared), so nothing goes stale.
+
+auto_updates_lists_time: "02:30"
+auto_updates_upgrade_time: "03:30"
+auto_updates_reboot_time: "04:30"
+auto_updates_random_delay: 15m
+
+auto_updates_reboot: true
+
+# Origins-Pattern entries on top of Ubuntu's Allowed-Origins (-security etc.).
+# Only repos actually configured on the server match, so listing extras is
+# harmless.
+auto_updates_origins:
+  - "origin=Ubuntu,archive=${distro_codename}-updates"
+  - "origin=Tailscale"
+  - "origin=packagecloud.io/crowdsec/crowdsec"
+  - "origin=cloudflared"
+
+# Packages never upgraded automatically (exact names or regexes).
+auto_updates_blacklist: []
+
+# cloudflared is first installed from GitHub's .deb (see cloudflared_connector);
+# Cloudflare's apt repo (codename-independent "any" suite) keeps it updated.
+auto_updates_cloudflared_repo: true

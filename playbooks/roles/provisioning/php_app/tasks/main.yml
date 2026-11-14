@@ -1,0 +1,76 @@
+---
+# Migrates the PHP apps declared in host_vars/<server>/apps.yml — see
+# defaults/main.yml. Run after vhosts.yml.
+
+- name: Skip servers without apps or app files
+  ansible.builtin.meta: end_host
+  when: (apps | default([])) | length == 0 and (app_files | default([])) | length == 0
+
+- name: Check each app entry
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z0-9][a-z0-9-]*$')
+      - item.hostname is defined and item.hostname | length > 0
+      - (item.layout | default('webroot')) in ['webroot', 'laravel']
+      - item.source is defined and item.source is match('^/')
+      - item.db is not defined or (item.db.name is defined and item.db.config is defined and (item.db.format | default('dotenv')) in ['define', 'dotenv'])
+    fail_msg: "Bad app entry: {{ item }}"
+    quiet: true
+  loop: "{{ apps | default([]) }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Install the extra PHP extensions apps rely on
+  ansible.builtin.apt:
+    name: "{{ php_app_php_packages }}"
+    state: present
+  become: true
+  notify: "restart php-fpm (apps)"
+
+- name: Safe mode — block outbound mail in the firewall
+  community.general.ufw:
+    rule: deny
+    direction: out
+    proto: tcp
+    to_port: "{{ item }}"
+    comment: "php_app safe mode: no mail from pre-prod copies"
+  loop: "{{ php_app_blocked_mail_ports }}"
+  become: true
+  when: php_app_safe_mode
+
+- name: Lift the outbound mail block (safe mode off)
+  community.general.ufw:
+    rule: deny
+    direction: out
+    proto: tcp
+    to_port: "{{ item }}"
+    delete: true
+  loop: "{{ php_app_blocked_mail_ports }}"
+  become: true
+  when: not php_app_safe_mode
+
+- name: Single files from the control host (e.g. a site's form-handler .env)
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: "{{ php_app_owner }}"
+    mode: "{{ item.mode | default('0640') }}"
+  loop: "{{ app_files | default([]) }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  become: true
+  diff: false  # never print secrets in --diff runs
+
+- name: Migrate each app
+  ansible.builtin.include_tasks: app.yml
+  loop: "{{ apps | default([]) }}"
+  loop_control:
+    loop_var: php_app
+    label: "{{ php_app.name }}"
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      {{ (apps | default([])) | map(attribute='name') | join(', ') or 'no apps' }} on {{ inventory_hostname }}
+      ({{ 'SAFE MODE: no crons, no outbound mail' if php_app_safe_mode else 'live: crons installed' }}).

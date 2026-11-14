@@ -1,0 +1,134 @@
+---
+# Unattended upgrades + automatic reboots — see defaults/main.yml.
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+  become: true
+
+- name: Cloudflare's apt repo, so cloudflared gets updates
+  # Added whether or not cloudflared is installed yet (provisioning installs
+  # it later, from GitHub's .deb): a repo only upgrades what's installed.
+  ansible.builtin.deb822_repository:
+    name: cloudflared
+    types: deb
+    uris: https://pkg.cloudflare.com/cloudflared
+    suites: any
+    components: main
+    signed_by: https://pkg.cloudflare.com/cloudflare-main.gpg
+  become: true
+  when: auto_updates_cloudflared_repo
+  register: auto_updates_cf_repo
+
+- name: Refresh package lists for the new repo
+  ansible.builtin.apt:
+    update_cache: true
+  become: true
+  when: auto_updates_cf_repo is changed
+
+- name: Turn on the nightly runs
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      // Managed by Ansible (provisioning/auto_updates).
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: What to upgrade, and when to reboot
+  # 52-… is read after Ubuntu's 50unattended-upgrades and adds to it.
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+    content: |
+      // Managed by Ansible (provisioning/auto_updates).
+      Unattended-Upgrade::Origins-Pattern {
+      {% for o in auto_updates_origins %}
+          "{{ o }}";
+      {% endfor %}
+      };
+      Unattended-Upgrade::Package-Blacklist {
+      {% for p in auto_updates_blacklist %}
+          "{{ p }}";
+      {% endfor %}
+      };
+      Unattended-Upgrade::Automatic-Reboot "{{ 'true' if auto_updates_reboot else 'false' }}";
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_updates_reboot_time }}";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Dpkg::Options { "--force-confdef"; "--force-confold"; };
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Timer drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: [apt-daily.timer, apt-daily-upgrade.timer]
+  become: true
+
+- name: Schedule the nightly timers
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.timer }}.d/10-schedule.conf"
+    content: |
+      # Managed by Ansible (provisioning/auto_updates).
+      [Timer]
+      OnCalendar=
+      OnCalendar=*-*-* {{ item.time }}
+      RandomizedDelaySec={{ auto_updates_random_delay }}
+      Persistent=true
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - { timer: apt-daily.timer, time: "{{ auto_updates_lists_time }}" }
+    - { timer: apt-daily-upgrade.timer, time: "{{ auto_updates_upgrade_time }}" }
+  become: true
+  register: auto_updates_timers
+  loop_control:
+    label: "{{ item.timer }} {{ item.time }}"
+
+- name: Reload systemd and restart the timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  loop: [apt-daily.timer, apt-daily-upgrade.timer]
+  become: true
+  when: auto_updates_timers is changed
+
+- name: Ensure unattended-upgrades is running
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+  become: true
+
+- name: Dry run — which origins will be upgraded
+  ansible.builtin.shell: |
+    set -o pipefail
+    unattended-upgrade --dry-run --debug 2>&1 | grep -E 'Allowed origins are|Using .*pattern' | head -3
+  args:
+    executable: /bin/bash
+  become: true
+  register: auto_updates_dry
+  changed_when: false
+  failed_when: auto_updates_dry.stdout | length == 0
+
+- name: Report
+  ansible.builtin.debug:
+    msg:
+      - "Nightly: lists {{ auto_updates_lists_time }}, upgrades {{ auto_updates_upgrade_time }}, reboot-if-needed {{ auto_updates_reboot_time if auto_updates_reboot else 'off' }} ({{ auto_updates_random_delay }} jitter)."
+      - "{{ auto_updates_dry.stdout_lines | first | default('') | truncate(400) }}"

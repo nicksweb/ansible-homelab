@@ -1,0 +1,54 @@
+#!/bin/sh
+# Managed by Ansible (provisioning/crowdsec).
+#
+# Called by crowdsec-custom-bouncer for every decision:
+#   crowdsec-apache-ban add|del <value> <duration> <reason> <json>
+# Keeps {{ crowdsec_apache_map }} as "<ip> <expiry-epoch>" lines, which
+# Apache reads as a RewriteMap (re-read automatically when the file changes,
+# no reload). Expired entries are dropped on every call; the service clears
+# the file on start because the bouncer then re-sends every active decision.
+set -eu
+
+MAP="{{ crowdsec_apache_map }}"
+LOCK=/run/crowdsec-apache-ban.lock
+DEFAULT_SECS=14400
+
+action="${1:-}"
+value="${2:-}"
+duration="${3:-0}"
+
+case "$action" in add|del) ;; *) exit 0 ;; esac
+[ -n "$value" ] || exit 0
+# Apache's map lookup is exact-match on the client address: ranges can't be
+# expressed there (the firewall bouncer still blocks them on the direct path).
+case "$value" in */*) exit 0 ;; esac
+
+# Duration arrives as seconds or Go-style ("3h59m54.2s"); fall back to 4h.
+secs="$(printf '%s\n' "$duration" | awk '{
+  n = $0; s = 0
+  if (n ~ /^[0-9.]+$/) { print int(n); exit }
+  while (match(n, /[0-9.]+(h|ms|m|s)/)) {
+    t = substr(n, RSTART, RLENGTH); n = substr(n, RSTART + RLENGTH)
+    if (t ~ /ms$/) continue
+    u = substr(t, length(t), 1); v = substr(t, 1, length(t) - 1) + 0
+    s += (u == "h") ? v * 3600 : (u == "m") ? v * 60 : v
+  }
+  print int(s)
+}')"
+[ "${secs:-0}" -gt 0 ] 2>/dev/null || secs=$DEFAULT_SECS
+
+now="$(date +%s)"
+exec 9>"$LOCK"
+flock 9
+
+tmp="$(mktemp "$MAP.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+if [ -f "$MAP" ]; then
+  awk -v ip="$value" -v now="$now" '$1 != ip && ($2 + 0) > now' "$MAP" > "$tmp"
+fi
+if [ "$action" = add ]; then
+  printf '%s %s\n' "$value" "$((now + secs))" >> "$tmp"
+fi
+chmod 0644 "$tmp"
+mv -f "$tmp" "$MAP"
+trap - EXIT
